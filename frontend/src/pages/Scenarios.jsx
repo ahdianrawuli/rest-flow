@@ -98,7 +98,7 @@ export default function Scenarios({ activeWorkspaceId }) {
             nodes, edges: parsed.edges || [] 
         });
         setSidebarOpen(false); setLogsOpen(false); setIsRunning(false); abortRef.current = false;
-        setConnectState(null); // Reset connection state when loading
+        setConnectState(null); 
     };
 
     const initiateNewScenario = () => {
@@ -220,7 +220,6 @@ export default function Scenarios({ activeWorkspaceId }) {
         const scaledRect = scaledContainer.getBoundingClientRect();
 
         const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-        // Membuat 4 panah berbeda agar warnanya dinamis mengikuti state garis. refX="9" menjamin panah menutup rapi garisnya
         defs.innerHTML = `
             <marker id="arrow-default" viewBox="0 -5 10 10" refX="9" refY="0" markerWidth="5" markerHeight="5" orient="auto"><path d="M 0 -5 L 10 0 L 0 5 z" fill="#94a3b8" /></marker>
             <marker id="arrow-running" viewBox="0 -5 10 10" refX="9" refY="0" markerWidth="5" markerHeight="5" orient="auto"><path d="M 0 -5 L 10 0 L 0 5 z" fill="#3b82f6" /></marker>
@@ -244,8 +243,7 @@ export default function Scenarios({ activeWorkspaceId }) {
             let x2 = ((rect2.left + rect2.width / 2) - scaledRect.left) / zoom;
             let y2 = ((rect2.top + rect2.height / 2) - scaledRect.top) / zoom;
 
-            // KALKULASI OFFSET - Menggeser titik awal & akhir agar menjauh dari kotak node
-            const offsetDist = 8; // Menghentikan garis 8px sebelum masuk ke area node
+            const offsetDist = 8; 
             if (edge.sourceHandle === 'right') x1 += offsetDist;
             if (edge.sourceHandle === 'left') x1 -= offsetDist;
             if (edge.sourceHandle === 'top') y1 -= offsetDist;
@@ -271,7 +269,6 @@ export default function Scenarios({ activeWorkspaceId }) {
             const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             path.setAttribute('d', `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`);
             
-            // Pewarnaan garis dan pemasangan marker (panah) yang senada warnanya
             if (edge.runtimeStatus === 'running') {
                 path.setAttribute('stroke', '#3b82f6');
                 path.setAttribute('stroke-width', '3'); 
@@ -298,7 +295,6 @@ export default function Scenarios({ activeWorkspaceId }) {
             path.setAttribute('fill', 'none'); 
             path.classList.add('flow-line');
 
-            // Garis tebal tersembunyi untuk area klik (menghapus edge)
             const clickPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             clickPath.setAttribute('d', `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`);
             clickPath.setAttribute('stroke', 'transparent'); clickPath.setAttribute('stroke-width', '25'); clickPath.setAttribute('fill', 'none'); clickPath.classList.add('edge-delete', 'cursor-pointer');
@@ -336,7 +332,7 @@ export default function Scenarios({ activeWorkspaceId }) {
     };
 
     // =====================================
-    // EKSPOR KE EXCEL HELPER (Native HTML XLS)
+    // EKSPOR KE EXCEL HELPER
     // =====================================
     const exportHTMLToExcel = (title, date, tableHTML, filename) => {
         const html = `
@@ -447,7 +443,7 @@ export default function Scenarios({ activeWorkspaceId }) {
     };
 
     // =====================================
-    // RUNNER: API FLOW TEST
+    // RUNNER: API FLOW TEST (DENGAN ASSERTION BARU)
     // =====================================
     const runApiFlowTest = async () => {
         if (currentScenario.nodes.length === 0) return showAlert('No nodes to run', 'warning');
@@ -604,6 +600,7 @@ export default function Scenarios({ activeWorkspaceId }) {
                                 }
                             }
 
+                            // --- PEMBARUAN LOGIKA ASSERTION ---
                             let assertions = [];
                             try { assertions = typeof reqData.assertions === 'string' ? JSON.parse(reqData.assertions) : (reqData.assertions || []); } catch(e) {}
                             if (assertions && assertions.length > 0) {
@@ -611,11 +608,33 @@ export default function Scenarios({ activeWorkspaceId }) {
                                     if (!a.value || a.value.trim() === '') return false;
                                     let passed = false;
                                     try {
-                                        if (a.type === 'status') { if (a.operator === 'equals') passed = responseStatus.toString() === a.value; else if (a.operator === 'contains') passed = responseStatus.toString().includes(a.value); else if (a.operator === 'less_than') passed = parseInt(responseStatus) < parseInt(a.value); } 
-                                        else if (a.type === 'time') { if (a.operator === 'equals') passed = parseInt(responseTime) === parseInt(a.value); else if (a.operator === 'less_than') passed = parseInt(responseTime) < parseInt(a.value); } 
-                                        else if (a.type === 'body_contains') { if (a.operator === 'contains') passed = responseBodyStr.includes(a.value); else if (a.operator === 'equals') passed = responseBodyStr === a.value; }
-                                    } catch(e) {}
-                                    return !passed;
+                                        let targetValue = '';
+                                        
+                                        // 1. Ekstraksi Target Value berdasarkan tipe assertion
+                                        if (a.type === 'status') targetValue = responseStatus.toString();
+                                        else if (a.type === 'time') targetValue = parseInt(responseTime);
+                                        else if (a.type === 'body' || a.type === 'body_contains') targetValue = responseBodyStr;
+                                        else if (a.type === 'header') targetValue = JSON.stringify(response.headers || {});
+                                        
+                                        // 2. Evaluasi berdasarkan operator
+                                        if (a.type === 'time') {
+                                            const expectVal = parseInt(a.value);
+                                            if (a.operator === 'equals') passed = targetValue === expectVal;
+                                            else if (a.operator === 'not_equals') passed = targetValue !== expectVal;
+                                            else if (a.operator === 'less_than') passed = targetValue < expectVal;
+                                            else if (a.operator === 'greater_than') passed = targetValue > expectVal;
+                                        } else {
+                                            const expectValStr = a.value.toString();
+                                            if (a.operator === 'equals') passed = targetValue === expectValStr;
+                                            else if (a.operator === 'not_equals') passed = targetValue !== expectValStr;
+                                            else if (a.operator === 'contains') passed = targetValue.includes(expectValStr);
+                                            else if (a.operator === 'not_contains') passed = !targetValue.includes(expectValStr);
+                                            else if (a.operator === 'less_than') passed = parseInt(targetValue) < parseInt(expectValStr);
+                                            else if (a.operator === 'greater_than') passed = parseInt(targetValue) > parseInt(expectValStr);
+                                        }
+                                    } catch(e) { passed = false; }
+                                    
+                                    return !passed; // Kembalikan true jika GAGAL (karena kita pakai `.some()`)
                                 });
                                 if (hasFailures) throw new Error(`Assertion failed on iter ${iter}`);
                             }
@@ -930,8 +949,8 @@ export default function Scenarios({ activeWorkspaceId }) {
                 }
             `}} />
             
-            {/* Sidebar Library */}
-            <aside className={`w-64 bg-gray-50 dark:bg-slate-800/50 border-r border-gray-200 dark:border-slate-700 flex flex-col shrink-0 z-30 absolute md:relative h-full transition-transform duration-300 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+            {/* Sidebar Library - PERBAIKAN 6: dark:bg-slate-800 agar solid */}
+            <aside className={`w-64 bg-gray-50 dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700 flex flex-col shrink-0 z-30 absolute md:relative h-full transition-transform duration-300 ${sidebarOpen ? 'translate-x-0 shadow-2xl md:shadow-none' : '-translate-x-full md:translate-x-0'}`}>
                 <div className="p-3 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center bg-white dark:bg-slate-800">
                     <h3 className="font-semibold text-sm text-gray-700 dark:text-gray-300"><i className="fa-solid fa-flask mr-2"></i>Test Scenarios</h3>
                     <button onClick={initiateNewScenario} className="p-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded hover:bg-blue-200 dark:hover:bg-blue-800/50 transition-colors" title="New Scenario"><i className="fa-solid fa-plus text-sm"></i></button>

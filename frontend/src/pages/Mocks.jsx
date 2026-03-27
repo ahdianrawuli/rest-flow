@@ -96,7 +96,8 @@ export default function Mocks({ activeWorkspaceId }) {
 
     return (
         <div className="flex-grow flex overflow-hidden w-full h-full relative">
-            <aside className={`w-64 bg-gray-50 dark:bg-slate-800/50 border-r border-gray-200 dark:border-slate-700 flex flex-col shrink-0 z-30 absolute md:relative h-full transition-transform duration-300 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+            {/* PERBAIKAN 6: Mengubah dark:bg-slate-800/50 menjadi dark:bg-slate-800 agar solid di mode mobile */}
+            <aside className={`w-64 bg-gray-50 dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700 flex flex-col shrink-0 z-30 absolute md:relative h-full transition-transform duration-300 ${sidebarOpen ? 'translate-x-0 shadow-2xl md:shadow-none' : '-translate-x-full md:translate-x-0'}`}>
                 <div className="p-3 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center bg-white dark:bg-slate-800">
                     <h3 className="font-semibold text-sm text-gray-700 dark:text-gray-300"><i className="fa-solid fa-server mr-2"></i>Mock Servers</h3>
                     <button onClick={handleNewMock} className="p-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded hover:bg-blue-200 dark:hover:bg-blue-800/50 transition-colors" title="New Mock"><i className="fa-solid fa-plus text-sm"></i></button>
@@ -197,4 +198,3 @@ export default function Mocks({ activeWorkspaceId }) {
         </div>
     );
 }
-

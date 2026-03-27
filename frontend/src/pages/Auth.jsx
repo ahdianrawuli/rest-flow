@@ -306,6 +306,37 @@ export default function Auth() {
                     </div>
                 </div>
 
+                {/* NEW Self-Hosting Section */}
+                <div className="w-full border-t border-gray-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 py-20 lg:py-32">
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                        <div className="relative overflow-hidden bg-white dark:bg-slate-800 rounded-3xl p-10 lg:p-16 border border-gray-100 dark:border-slate-700 shadow-xl flex flex-col lg:flex-row items-center gap-10">
+                            {/* Decorative Background */}
+                            <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-blue-100 dark:bg-blue-900/30 rounded-full blur-3xl"></div>
+
+                            <div className="relative z-10 flex-grow text-center lg:text-left">
+                                <span className="text-sm font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider mb-2 block">Take Command</span>
+                                <h2 className="text-3xl font-extrabold text-gray-900 dark:text-white sm:text-4xl tracking-tight mb-4">
+                                    Self-Host Rest Flow on Your Own Server
+                                </h2>
+                                <p className="text-lg text-gray-600 dark:text-gray-400 max-w-3xl leading-relaxed mb-0">
+                                    For maximum privacy, security compliance, and direct integration with your private internal networks, you can easily deploy Rest Flow on your own infrastructure via Docker. Get complete control over your data and testing environment.
+                                </p>
+                            </div>
+                            <div className="relative z-10 shrink-0">
+                                <a 
+                                    href="https://github.com/ahdianrawuli/rest-flow" 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-3 px-8 py-4 bg-gray-900 hover:bg-gray-800 text-white rounded-xl text-lg font-bold shadow-lg transition-colors"
+                                >
+                                    <i className="fa-brands fa-github text-xl"></i>
+                                    View Installation Guide
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 {/* Testimonials Section */}
                 <div className="w-full border-t border-gray-200 dark:border-slate-800 bg-white dark:bg-slate-800/30 py-20 lg:py-32">
                     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -340,7 +371,7 @@ export default function Auth() {
 
             </main>
 
-            {/* Modern Powered By Footer */}
+            {/* Modern Powered By Footer - Added pb-16/pb-24 for mobile clearance */}
             <footer className="w-full bg-slate-900 dark:bg-slate-950 pt-12 pb-24 sm:pb-16 mt-auto border-t border-slate-800 shrink-0">
             <div className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
             <div className="flex flex-col items-center justify-center gap-3">

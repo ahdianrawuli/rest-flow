@@ -6,7 +6,7 @@ export default function RequestsSidebar({
     sidebarOpen, setSidebarOpen, loadHistory, handleLoadRequest, getEmptyRequest
 }) {
     const [historySearch, setHistorySearch] = useState('');
-    const [expandedFolders, setExpandedFolders] = useState({}); // State tracking folder collapse
+    const [expandedFolders, setExpandedFolders] = useState({}); 
     
     // State untuk Modal Create Folder
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -24,7 +24,7 @@ export default function RequestsSidebar({
         e.stopPropagation();
         setExpandedFolders(prev => ({
             ...prev,
-            [folderId]: prev[folderId] !== undefined ? !prev[folderId] : false // toggle false jika sblmnya belum diset (krn default expanded)
+            [folderId]: prev[folderId] !== undefined ? !prev[folderId] : false
         }));
     };
 
@@ -77,7 +77,8 @@ export default function RequestsSidebar({
 
     return (
         <>
-            <aside className={`w-64 bg-gray-50 dark:bg-slate-800/50 border-r border-gray-200 dark:border-slate-700 flex flex-col shrink-0 z-30 absolute md:relative h-full transition-transform duration-300 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+            {/* PERBAIKAN 6: Mengubah dark:bg-slate-800/50 menjadi dark:bg-slate-800 agar solid di mode mobile */}
+            <aside className={`w-64 bg-gray-50 dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700 flex flex-col shrink-0 z-30 absolute md:relative h-full transition-transform duration-300 ${sidebarOpen ? 'translate-x-0 shadow-2xl md:shadow-none' : '-translate-x-full md:translate-x-0'}`}>
                 
                 {/* Header Sidebar */}
                 <div className="p-3 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center bg-white dark:bg-slate-800 sticky top-0 z-10">
@@ -113,10 +114,8 @@ export default function RequestsSidebar({
                     {foldersList.map(folder => {
                         const folderReqs = filteredReqs.filter(r => r.folder_id === folder.id);
                         
-                        // Sembunyikan folder jika sedang mencari dan tidak ada request yang cocok di dalamnya
                         if (q !== '' && folderReqs.length === 0 && !(folder.name||'').toLowerCase().includes(q)) return null;
                         
-                        // Default expanded adalah true, kecuali secara eksplisit diset false di state
                         const isExpanded = expandedFolders[folder.id] !== false;
 
                         return (
@@ -289,4 +288,3 @@ export default function RequestsSidebar({
         </>
     );
 }
-

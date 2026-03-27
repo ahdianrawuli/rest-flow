@@ -8,9 +8,20 @@ export default function RequestEditor({
 }) {
     const [activeTab, setActiveTab] = useState('params');
     
+    // FUNGSI BARU: Menambahkan baris kosong secara eksplisit saat tombol "+ Add" ditekan
+    const addNewRow = (field) => {
+        const list = [...currentRequest[field]];
+        let newRow = { key: '', value: '' };
+        if (field === 'formData') newRow = { key: '', value: '', type: 'text', file: null };
+        if (field === 'assertions') newRow = { type: 'status', operator: 'equals', value: '' };
+        list.push(newRow);
+        setCurrentRequest(prev => ({ ...prev, [field]: list }));
+    };
+
     const updateList = (field, index, subfield, value) => {
         const list = [...currentRequest[field]];
         list[index][subfield] = value;
+        // Otomatis tambah baris jika mengetik di baris terakhir
         if (index === list.length - 1 && value.trim() !== '') {
             let newRow = { key: '', value: '' };
             if (field === 'formData') newRow = { key: '', value: '', type: 'text', file: null };
@@ -34,27 +45,39 @@ export default function RequestEditor({
         if (field === 'params') setTimeout(syncParamsToUrl, 10);
     };
 
+    // PERBAIKAN MASALAH 3: Parsing URL manual agar environment variable {{...}} tidak menyebabkan Error (Invalid URL)
     const syncUrlToParams = (urlString) => {
-        try {
-            const urlObj = new URL(urlString || currentRequest.url);
+        setCurrentRequest(prev => {
+            const parts = urlString.split('?');
             const params = [];
-            for (const [key, value] of urlObj.searchParams.entries()) params.push({ key, value });
+            if (parts.length > 1) {
+                const queryString = parts.slice(1).join('?');
+                const searchParams = new URLSearchParams(queryString);
+                for (const [key, value] of searchParams.entries()) {
+                    params.push({ key, value });
+                }
+            }
             if (params.length === 0) params.push({ key: '', value: '' });
-            setCurrentRequest(prev => ({ ...prev, url: urlString, params }));
-        } catch (e) {
-            setCurrentRequest(prev => ({ ...prev, url: urlString }));
-        }
+            return { ...prev, url: urlString, params };
+        });
     };
 
+    // PERBAIKAN MASALAH 3: Generate URL baru tanpa merusak format {{...}}
     const syncParamsToUrl = () => {
         setCurrentRequest(prev => {
-            try {
-                if (!prev.url) return prev;
-                const urlObj = new URL(prev.url);
-                urlObj.search = '';
-                prev.params.forEach(p => { if (p.key) urlObj.searchParams.append(p.key, p.value); });
-                return { ...prev, url: urlObj.toString() };
-            } catch(e) { return prev; }
+            if (!prev.url) return prev;
+            let baseUrl = prev.url.split('?')[0];
+            const queryParts = [];
+            prev.params.forEach(p => {
+                if (p.key) {
+                    // Agar tanda { dan } tidak ikut di encode (biar tetap enak dibaca di UI)
+                    let k = encodeURIComponent(p.key).replace(/%7B/g, '{').replace(/%7D/g, '}');
+                    let v = encodeURIComponent(p.value).replace(/%7B/g, '{').replace(/%7D/g, '}');
+                    queryParts.push(`${k}=${v}`);
+                }
+            });
+            const newUrl = queryParts.length > 0 ? `${baseUrl}?${queryParts.join('&')}` : baseUrl;
+            return { ...prev, url: newUrl };
         });
     };
 
@@ -72,7 +95,6 @@ export default function RequestEditor({
         
         let finalBody = currentRequest.body;
         
-        // Memastikan form-data dan urlencoded ikut diekspor
         if (currentRequest.bodyType === 'form-data') {
             finalBody = JSON.stringify(currentRequest.formData.filter(f => f.key.trim() !== ''));
         } else if (currentRequest.bodyType === 'urlencoded') {
@@ -105,30 +127,43 @@ export default function RequestEditor({
         URL.revokeObjectURL(url);
     };
 
+    const selectedFolder = currentRequest.folder_id ? foldersList.find(f => f.id === currentRequest.folder_id) : null;
+    const folderTextLength = selectedFolder ? selectedFolder.name.length : 4;
+    const dynamicSelectWidth = `calc(${Math.min(folderTextLength + 3, 20)}ch + 10px)`;
+
     return (
         <main className="flex-grow flex flex-col bg-white dark:bg-slate-900 min-w-0 h-full overflow-hidden">
             {/* Top Action Bar */}
-            <div className="p-2 md:p-3 border-b border-gray-200 dark:border-slate-700 flex flex-col md:flex-row md:justify-between md:items-center gap-2 bg-gray-50/50 dark:bg-slate-800/30 shrink-0">
+            <div className="p-2 md:p-3 border-b border-gray-200 dark:border-slate-700 flex flex-col md:flex-row md:justify-between md:items-center gap-3 bg-gray-50/50 dark:bg-slate-800/30 shrink-0">
                 <div className="flex items-center gap-2 w-full min-w-0 flex-grow">
-                    <button onClick={() => setSidebarOpen(true)} className="md:hidden p-1.5 text-gray-500 hover:bg-gray-200 dark:hover:bg-slate-700 rounded transition-colors">
-                        <i className="fa-solid fa-folder-tree"></i>
+                    <button 
+                        onClick={() => setSidebarOpen(true)} 
+                        className="md:hidden px-3 py-1.5 text-sm font-bold text-blue-700 bg-blue-100 hover:bg-blue-200 border border-blue-200 dark:bg-blue-900/40 dark:text-blue-400 dark:border-blue-800 rounded-lg transition-colors flex items-center gap-2 shrink-0 shadow-sm"
+                    >
+                        <i className="fa-solid fa-folder-tree"></i> <span>Collections</span>
                     </button>
-                    <div className="flex items-center truncate min-w-0 flex-grow bg-transparent hover:bg-gray-100 dark:hover:bg-slate-800 border border-transparent hover:border-gray-300 dark:hover:border-slate-600 focus-within:border-blue-500 rounded px-1 group cursor-text">
-                        <select 
-                            value={currentRequest.folder_id || ''} 
-                            onChange={e => setCurrentRequest(p => ({ ...p, folder_id: e.target.value ? parseInt(e.target.value) : null }))}
-                            className="text-gray-500 dark:text-gray-400 font-semibold text-sm md:text-base bg-transparent outline-none cursor-pointer hover:text-blue-600 appearance-none pr-1"
-                            title="Move Request to Folder"
-                        >
-                            <option value="">Root /</option>
-                            {foldersList.map(f => <option key={f.id} value={f.id}>{f.name} /</option>)}
-                        </select>
+
+                    <div className="flex items-center flex-grow bg-white dark:bg-slate-800 md:bg-transparent md:dark:bg-transparent border border-gray-200 dark:border-slate-700 md:border-transparent md:hover:bg-gray-100 md:dark:hover:bg-slate-800 focus-within:border-blue-500 rounded-lg md:rounded px-2 py-1 md:py-0 group cursor-text shadow-sm md:shadow-none min-w-0 overflow-hidden">
+                        <div className="relative flex items-center shrink-0">
+                            <select 
+                                value={currentRequest.folder_id || ''} 
+                                onChange={e => setCurrentRequest(p => ({ ...p, folder_id: e.target.value ? parseInt(e.target.value) : null }))}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                title="Move Request to Folder"
+                            >
+                                <option value="">Root</option>
+                                {foldersList.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                            </select>
+                            <span className="text-gray-500 dark:text-gray-400 hover:text-blue-600 font-semibold text-sm md:text-base whitespace-nowrap pr-1 group-hover:text-blue-500 transition-colors">
+                                {currentRequest.folder_id ? foldersList.find(f => f.id === currentRequest.folder_id)?.name || 'Root' : 'Root'} /
+                            </span>
+                        </div>
                         <input 
                             type="text" 
                             value={currentRequest.name} 
                             onChange={e => setCurrentRequest(p => ({...p, name: e.target.value}))} 
                             placeholder="Untitled Request" 
-                            className="bg-transparent font-semibold text-base md:text-lg border-none outline-none py-0.5 w-full min-w-0 text-ellipsis" 
+                            className="bg-transparent font-bold text-base md:text-lg border-none outline-none py-0.5 w-full min-w-[50px] text-ellipsis text-gray-800 dark:text-gray-100" 
                         />
                     </div>
                 </div>
@@ -183,7 +218,7 @@ export default function RequestEditor({
             </div>
 
             <div className="flex-grow flex flex-col md:flex-row overflow-hidden">
-                {/* Tabs Pane (Params, Auth, Headers, Body, Scripts, Assertions) */}
+                {/* Tabs Pane */}
                 <div className="flex-1 border-b md:border-b-0 md:border-r border-gray-200 dark:border-slate-700 flex flex-col min-h-[50%] md:min-h-0 overflow-hidden">
                     <div className="flex border-b border-gray-200 dark:border-slate-700 px-4 pt-2 gap-4 shrink-0 overflow-x-auto no-scrollbar bg-white dark:bg-slate-900">
                         {['params', 'authorization', 'headers', 'body', 'scripts', 'assertions'].map(tab => (
@@ -197,7 +232,7 @@ export default function RequestEditor({
                         ))}
                     </div>
 
-                    <div className="flex-grow overflow-y-auto bg-gray-50/30 dark:bg-slate-900/50 p-4 pb-12">
+                    <div className="flex-grow overflow-y-auto bg-gray-50/30 dark:bg-slate-900/50 p-4 pb-12 custom-scrollbar">
                         
                         {/* PARAMS TAB */}
                         {activeTab === 'params' && (
@@ -209,6 +244,9 @@ export default function RequestEditor({
                                         <button onClick={() => removeListItem('params', i)} className="p-1.5 text-gray-400 hover:text-red-500"><i className="fa-solid fa-trash"></i></button>
                                     </div>
                                 ))}
+                                <button onClick={() => addNewRow('params')} className="mt-2 flex items-center gap-1.5 text-sm font-semibold text-blue-600 hover:text-blue-800 transition-colors">
+                                    <i className="fa-solid fa-plus text-xs"></i> Add Parameter
+                                </button>
                             </div>
                         )}
                         
@@ -222,6 +260,9 @@ export default function RequestEditor({
                                         <button onClick={() => removeListItem('headers', i)} className="p-1.5 text-gray-400 hover:text-red-500"><i className="fa-solid fa-trash"></i></button>
                                     </div>
                                 ))}
+                                <button onClick={() => addNewRow('headers')} className="mt-2 flex items-center gap-1.5 text-sm font-semibold text-blue-600 hover:text-blue-800 transition-colors">
+                                    <i className="fa-solid fa-plus text-xs"></i> Add Header
+                                </button>
                             </div>
                         )}
                         
@@ -231,7 +272,7 @@ export default function RequestEditor({
                                 <select 
                                     value={currentRequest.authorization.type} 
                                     onChange={e => setCurrentRequest(p => ({...p, authorization: {...p.authorization, type: e.target.value}}))} 
-                                    className="mb-4 w-1/2 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                    className="mb-4 w-full md:w-1/2 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm"
                                 >
                                     <option value="none">No Auth</option>
                                     <option value="bearer">Bearer Token</option>
@@ -252,7 +293,7 @@ export default function RequestEditor({
                                     <div className="space-y-2">
                                         <input type="text" placeholder="Key" value={currentRequest.authorization.apikey} onChange={e => setCurrentRequest(p => ({...p, authorization: {...p.authorization, apikey: e.target.value}}))} className="w-full bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-3 py-2 text-sm font-mono outline-none focus:border-blue-500" />
                                         <input type="text" placeholder="Value" value={currentRequest.authorization.apivalue} onChange={e => setCurrentRequest(p => ({...p, authorization: {...p.authorization, apivalue: e.target.value}}))} className="w-full bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-3 py-2 text-sm font-mono outline-none focus:border-blue-500" />
-                                        <select value={currentRequest.authorization.addto} onChange={e => setCurrentRequest(p => ({...p, authorization: {...p.authorization, addto: e.target.value}}))} className="w-1/2 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                                        <select value={currentRequest.authorization.addto} onChange={e => setCurrentRequest(p => ({...p, authorization: {...p.authorization, addto: e.target.value}}))} className="w-full md:w-1/2 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm">
                                             <option value="header">Header</option>
                                             <option value="query">Query Params</option>
                                         </select>
@@ -281,7 +322,7 @@ export default function RequestEditor({
                                     <textarea 
                                         value={currentRequest.body} 
                                         onChange={e => setCurrentRequest(p => ({...p, body: e.target.value}))} 
-                                        className="flex-grow w-full bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded p-3 font-mono text-sm resize-none outline-none focus:ring-2 focus:ring-blue-500"
+                                        className="flex-grow w-full bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded p-3 font-mono text-sm resize-none outline-none focus:ring-2 focus:ring-blue-500 min-h-[200px]"
                                         placeholder={`Enter your ${currentRequest.bodyType} payload here...`}
                                     ></textarea>
                                 )}
@@ -290,18 +331,21 @@ export default function RequestEditor({
                                         {currentRequest.formData.map((item, i) => (
                                             <div key={i} className="flex gap-2 items-center mb-2">
                                                 <input type="text" placeholder="Key" value={item.key} onChange={e => updateList('formData', i, 'key', e.target.value)} className="flex-1 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500" />
-                                                <select value={item.type} onChange={e => { updateList('formData', i, 'type', e.target.value); updateList('formData', i, 'value', ''); updateList('formData', i, 'file', null); }} className="w-24 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500">
+                                                <select value={item.type} onChange={e => { updateList('formData', i, 'type', e.target.value); updateList('formData', i, 'value', ''); updateList('formData', i, 'file', null); }} className="w-20 md:w-24 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-1 py-1.5 text-sm outline-none focus:border-blue-500">
                                                     <option value="text">Text</option>
                                                     <option value="file">File</option>
                                                 </select>
                                                 {item.type === 'file' ? (
-                                                    <input type="file" onChange={(e) => handleFileUpload(e, i)} className="flex-1 text-sm file:mr-4 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-slate-700 dark:file:text-blue-400 dark:hover:file:bg-slate-600" />
+                                                    <input type="file" onChange={(e) => handleFileUpload(e, i)} className="flex-1 text-sm file:mr-4 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-slate-700 dark:file:text-blue-400 dark:hover:file:bg-slate-600 w-full overflow-hidden" />
                                                 ) : (
                                                     <input type="text" placeholder="Value" value={item.value} onChange={e => updateList('formData', i, 'value', e.target.value)} className="flex-1 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500" />
                                                 )}
                                                 <button onClick={() => removeListItem('formData', i)} className="p-1.5 text-gray-400 hover:text-red-500 rounded"><i className="fa-solid fa-trash"></i></button>
                                             </div>
                                         ))}
+                                        <button onClick={() => addNewRow('formData')} className="mt-2 flex items-center gap-1.5 text-sm font-semibold text-blue-600 hover:text-blue-800 transition-colors">
+                                            <i className="fa-solid fa-plus text-xs"></i> Add Form Data
+                                        </button>
                                     </div>
                                 )}
                                 {currentRequest.bodyType === 'urlencoded' && (
@@ -313,6 +357,9 @@ export default function RequestEditor({
                                                 <button onClick={() => removeListItem('urlencoded', i)} className="p-1.5 text-gray-400 hover:text-red-500 rounded"><i className="fa-solid fa-trash"></i></button>
                                             </div>
                                         ))}
+                                        <button onClick={() => addNewRow('urlencoded')} className="mt-2 flex items-center gap-1.5 text-sm font-semibold text-blue-600 hover:text-blue-800 transition-colors">
+                                            <i className="fa-solid fa-plus text-xs"></i> Add Url-Encoded Parameter
+                                        </button>
                                     </div>
                                 )}
                             </div>
@@ -321,11 +368,11 @@ export default function RequestEditor({
                         {/* SCRIPTS TAB */}
                         {activeTab === 'scripts' && (
                             <div className="space-y-4 h-full flex flex-col">
-                                <div className="flex-1 flex flex-col">
+                                <div className="flex-1 flex flex-col min-h-[120px]">
                                     <span className="text-xs mb-1 font-bold text-gray-600 dark:text-gray-300">Pre-request Script (Executed before sending)</span>
                                     <textarea value={currentRequest.pre_request_script} onChange={e => setCurrentRequest(p => ({...p, pre_request_script: e.target.value}))} className="flex-grow w-full bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded p-3 font-mono text-xs resize-none outline-none focus:ring-2 focus:ring-blue-500" placeholder="request.headers.push({key: 'X-Time', value: Date.now()});"></textarea>
                                 </div>
-                                <div className="flex-1 flex flex-col">
+                                <div className="flex-1 flex flex-col min-h-[120px]">
                                     <span className="text-xs mb-1 font-bold text-gray-600 dark:text-gray-300">Post-request Script (Executed after response)</span>
                                     <textarea value={currentRequest.post_request_script} onChange={e => setCurrentRequest(p => ({...p, post_request_script: e.target.value}))} className="flex-grow w-full bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded p-3 font-mono text-xs resize-none outline-none focus:ring-2 focus:ring-blue-500" placeholder="if (response.status === 200) { variables['token'] = response.data.token; }"></textarea>
                                 </div>
@@ -336,21 +383,29 @@ export default function RequestEditor({
                         {activeTab === 'assertions' && (
                             <div>
                                 {currentRequest.assertions.map((a, i) => (
+                                    // PERBAIKAN MASALAH 5: Membuang flex-wrap agar persis seperti horizontal layout parameters
                                     <div key={i} className="flex gap-2 items-center mb-2">
-                                        <select value={a.type} onChange={e => updateList('assertions', i, 'type', e.target.value)} className="w-1/3 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500">
+                                        <select value={a.type} onChange={e => updateList('assertions', i, 'type', e.target.value)} className="w-1/3 min-w-[100px] bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500">
                                             <option value="status">Status Code</option>
                                             <option value="time">Response Time (ms)</option>
-                                            <option value="body_contains">Body Contains</option>
+                                            <option value="body">Response Body</option>
+                                            <option value="header">Response Header</option>
                                         </select>
-                                        <select value={a.operator} onChange={e => updateList('assertions', i, 'operator', e.target.value)} className="w-1/4 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500">
+                                        <select value={a.operator} onChange={e => updateList('assertions', i, 'operator', e.target.value)} className="w-1/3 min-w-[100px] bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500">
                                             <option value="equals">Equals</option>
+                                            <option value="not_equals">Not Equals</option>
                                             <option value="contains">Contains</option>
+                                            <option value="not_contains">Not Contains</option>
                                             <option value="less_than">Less Than</option>
+                                            <option value="greater_than">More Than</option>
                                         </select>
                                         <input type="text" placeholder="Value" value={a.value} onChange={e => updateList('assertions', i, 'value', e.target.value)} className="flex-1 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500" />
-                                        <button onClick={() => removeListItem('assertions', i)} className="p-1.5 text-gray-400 hover:text-red-500"><i className="fa-solid fa-trash"></i></button>
+                                        <button onClick={() => removeListItem('assertions', i)} className="p-1.5 text-gray-400 hover:text-red-500 shrink-0"><i className="fa-solid fa-trash"></i></button>
                                     </div>
                                 ))}
+                                <button onClick={() => addNewRow('assertions')} className="mt-2 flex items-center gap-1.5 text-sm font-semibold text-blue-600 hover:text-blue-800 transition-colors">
+                                    <i className="fa-solid fa-plus text-xs"></i> Add Assertion
+                                </button>
                             </div>
                         )}
                     </div>

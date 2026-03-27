@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ApiService } from '../utils/api';
 import { useNavigate } from 'react-router-dom';
 import InviteModal from './InviteModal';
@@ -7,9 +7,15 @@ import AgentModal from './AgentModal';
 export default function Header({ toggleTheme, activeWorkspaceId, setActiveWorkspaceId, toggleSidebar }) {
     const navigate = useNavigate();
     const [workspaces, setWorkspaces] = useState([]);
+    
+    // Dropdown States
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const [userDropdownOpen, setUserDropdownOpen] = useState(false);
     
+    // Refs for detecting clicks outside to close dropdowns
+    const workspaceDropdownRef = useRef(null);
+    const profileDropdownRef = useRef(null);
+
     // Modal States
     const [modalOpen, setModalOpen] = useState(false);
     const [importModalOpen, setImportModalOpen] = useState(false);
@@ -58,6 +64,23 @@ export default function Header({ toggleTheme, activeWorkspaceId, setActiveWorksp
         return () => clearInterval(agentInterval);
     }, []);
 
+    // PERBAIKAN 1: Event Listener untuk mendeteksi klik di luar Dropdown
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (workspaceDropdownRef.current && !workspaceDropdownRef.current.contains(event.target)) {
+                setDropdownOpen(false);
+            }
+            if (profileDropdownRef.current && !profileDropdownRef.current.contains(event.target)) {
+                setUserDropdownOpen(false);
+            }
+        };
+
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, []);
+
     const checkAgentStatus = async () => {
         try {
             const data = await ApiService.getAgentData();
@@ -89,7 +112,6 @@ export default function Header({ toggleTheme, activeWorkspaceId, setActiveWorksp
         }
     };
 
-    // Fungsi Delete Account
     const handleDeleteAccount = () => {
         setConfirmConfig({
             isOpen: true,
@@ -242,29 +264,31 @@ export default function Header({ toggleTheme, activeWorkspaceId, setActiveWorksp
 
     return (
         <>
-        <header className="h-14 border-b border-gray-200/80 dark:border-slate-700/80 bg-white/80 dark:bg-slate-800/80 backdrop-blur-md flex items-center justify-between px-2 sm:px-4 shrink-0 shadow-sm w-full transition-colors duration-200">
-            <div className="flex-1 flex items-center gap-2 min-w-0">
-                <button onClick={toggleSidebar} className="md:hidden p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-700 rounded transition-colors shrink-0"><i className="fa-solid fa-bars"></i></button>
-                <div className="text-blue-600 dark:text-blue-400 flex items-center gap-2 font-bold text-lg truncate">
-                    <i className="fa-solid fa-bolt shrink-0"></i> <span className="hidden sm:inline truncate">Rest Flow</span>
+        <header className="h-14 md:h-16 border-b border-gray-200/80 dark:border-slate-700/80 bg-white/80 dark:bg-slate-800/80 backdrop-blur-md flex items-center justify-between px-3 md:px-6 shrink-0 shadow-sm w-full transition-colors duration-200 relative z-30">
+            
+            {/* Bagian Kiri: Logo & Hamburger */}
+            <div className="flex items-center gap-3 shrink-0">
+                <button onClick={toggleSidebar} className="md:hidden p-1.5 text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-700 rounded transition-colors"><i className="fa-solid fa-bars text-lg"></i></button>
+                <div className="text-blue-600 dark:text-blue-400 flex items-center gap-2 font-bold text-lg md:text-xl tracking-tight">
+                    <i className="fa-solid fa-bolt"></i> <span className="hidden sm:inline">Rest Flow</span>
                 </div>
             </div>
 
-            {/* Bagian Workspace dengan wrapper relative untuk meratakan dropdown ke kiri secara presisi */}
-            <div className="flex-1 flex items-center sm:justify-start lg:justify-center min-w-0 px-2">
-                <div className="relative w-full max-w-[200px] sm:max-w-xs">
-                    <button onClick={() => setDropdownOpen(!dropdownOpen)} className="flex items-center justify-between gap-2 text-sm font-medium hover:bg-gray-100 dark:hover:bg-slate-700 py-1.5 px-2 sm:px-3 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 transition-colors w-full shadow-sm">
+            {/* Bagian Tengah: Workspace Dropdown */}
+            <div className="flex-1 flex justify-center min-w-0 px-2 md:px-4">
+                <div className="relative w-full max-w-[140px] sm:max-w-xs md:max-w-md flex justify-center z-50" ref={workspaceDropdownRef}>
+                    <button onClick={() => setDropdownOpen(!dropdownOpen)} className="relative z-50 flex items-center justify-between gap-2 text-sm font-medium hover:bg-gray-100 dark:hover:bg-slate-700 py-1.5 px-3 rounded-lg border border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800 transition-colors w-full shadow-sm">
                         <div className="flex items-center gap-2 truncate">
                             <i className="fa-solid fa-layer-group text-blue-500 shrink-0"></i>
                             <span className="truncate">{activeWorkspaceName}</span>
                         </div>
-                        <i className="fa-solid fa-chevron-down text-xs text-gray-400 shrink-0"></i>
+                        <i className="fa-solid fa-chevron-down text-[10px] text-gray-400 shrink-0"></i>
                     </button>
 
                     {dropdownOpen && (
-                        <div className="absolute top-full mt-2 w-64 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-gray-200 dark:border-slate-700 py-2 z-50 left-0">
+                        <div className="absolute top-full mt-2 w-64 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-gray-200 dark:border-slate-700 py-2 z-50 left-1/2 -translate-x-1/2 sm:left-0 sm:translate-x-0">
                             <div className="px-3 pb-2 mb-2 border-b border-gray-100 dark:border-slate-700"><span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Your Workspaces</span></div>
-                            <div className="max-h-48 overflow-y-auto">
+                            <div className="max-h-48 overflow-y-auto custom-scrollbar">
                                 {workspaces.map(w => (
                                     <div key={w.id} className={`px-3 py-2 flex justify-between items-center cursor-pointer hover:bg-gray-100 dark:hover:bg-slate-700 group ${w.id === activeWorkspaceId ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' : ''}`}>
                                         <div className="flex items-center gap-2 truncate flex-grow" onClick={() => { setActiveWorkspaceId(w.id); setDropdownOpen(false); }}>
@@ -288,35 +312,45 @@ export default function Header({ toggleTheme, activeWorkspaceId, setActiveWorksp
                 </div>
             </div>
 
-            <div className="flex-1 flex items-center justify-end gap-2 sm:gap-4 min-w-0">
-                <button onClick={() => setAgentModalOpen(true)} className="relative flex items-center gap-2 py-1.5 px-3 rounded-lg text-sm font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors border border-transparent hover:border-gray-200 dark:hover:border-slate-600" title="Local Agent Tunnel">
-                    <i className="fa-solid fa-network-wired text-indigo-500"></i><span className="hidden md:inline">Agent</span>
-                    <span className="absolute top-1.5 right-1.5 md:relative md:top-0 md:right-0 flex h-2.5 w-2.5 ml-1">
+            {/* Bagian Kanan: Agent, Theme, Profile */}
+            <div className="flex items-center justify-end gap-1.5 md:gap-3 shrink-0">
+                {/* PERBAIKAN 2: Agent Indicator Tidak Saling Tumpuk, ditempatkan persis di pojok seperti notifikasi */}
+                <button onClick={() => setAgentModalOpen(true)} className="relative flex items-center gap-2 py-1.5 px-2 md:px-3 rounded-lg text-sm font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors border border-transparent hover:border-gray-200 dark:hover:border-slate-600" title="Local Agent Tunnel">
+                    <i className="fa-solid fa-network-wired text-indigo-500"></i>
+                    <span className="hidden md:inline">Agent</span>
+                    
+                    {/* Badge Indicator diletakkan absolute di pojok kanan atas untuk HP, dan relative sejajar untuk Desktop */}
+                    <span className="absolute -top-1 -right-1 md:relative md:top-0 md:right-0 flex h-2.5 w-2.5">
                         {isAgentOnline && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
                         <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isAgentOnline ? 'bg-emerald-500' : 'bg-gray-400 dark:bg-gray-500'}`}></span>
                     </span>
                 </button>
-                <div className="w-px h-6 bg-gray-200 dark:bg-slate-700 hidden sm:block"></div>
+                
+                <div className="w-px h-5 bg-gray-200 dark:bg-slate-700 hidden sm:block"></div>
+                
                 <button onClick={toggleTheme} className="p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-full transition-colors shrink-0"><i className="fa-solid fa-circle-half-stroke"></i></button>
-                <div className="relative">
-                    <button onClick={() => setUserDropdownOpen(!userDropdownOpen)} className="flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-slate-700 py-1 px-2 rounded-lg transition-colors min-w-0">
-                        <div className="w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold text-sm shadow-inner shrink-0"><span>{username.charAt(0).toUpperCase()}</span></div>
-                        <span className="text-sm font-medium hidden sm:block truncate">{username}</span><i className="fa-solid fa-chevron-down text-xs text-gray-400 hidden sm:block shrink-0"></i>
+                
+                <div className="relative z-50" ref={profileDropdownRef}>
+                    <button onClick={() => setUserDropdownOpen(!userDropdownOpen)} className="relative z-50 flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-slate-700 py-1 px-1.5 md:px-2 rounded-lg transition-colors min-w-0">
+                        <div className="w-7 h-7 md:w-8 md:h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold text-xs md:text-sm shadow-inner shrink-0"><span>{username.charAt(0).toUpperCase()}</span></div>
+                        <span className="text-sm font-medium hidden sm:block truncate max-w-[100px]">{username}</span>
+                        <i className="fa-solid fa-chevron-down text-[10px] text-gray-400 hidden sm:block shrink-0"></i>
                     </button>
+
                     {userDropdownOpen && (
-                        <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-gray-200 dark:border-slate-700 py-1 z-50">
+                        <div className="absolute top-full mt-2 right-0 w-48 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-gray-200 dark:border-slate-700 py-1 z-50">
                             <button onClick={() => { setUserDropdownOpen(false); setProfileModalOpen(true); loadProfile(); }} className="w-full text-left px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors">
-                                <i className="fa-solid fa-user mr-2 text-gray-400"></i> Profile Settings
+                                <i className="fa-solid fa-user w-5 text-gray-400"></i> Profile Settings
                             </button>
                             <button onClick={() => { ApiService.logout(); navigate('/auth'); }} className="w-full text-left px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-slate-700 transition-colors">
-                                <i className="fa-solid fa-right-from-bracket mr-2"></i> Logout
+                                <i className="fa-solid fa-right-from-bracket w-5"></i> Logout
                             </button>
                         </div>
                     )}
                 </div>
             </div>
 
-            {/* Profile Settings Modal dengan Center yang Sempurna & Delete Account */}
+            {/* Profile Settings Modal */}
             {profileModalOpen && (
                 <div className="fixed top-0 left-0 w-screen h-[100dvh] bg-black/50 z-[9999] flex items-center justify-center p-4 backdrop-blur-sm m-0">
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-gray-200 dark:border-slate-700">
@@ -406,7 +440,7 @@ export default function Header({ toggleTheme, activeWorkspaceId, setActiveWorksp
             <AgentModal isOpen={agentModalOpen} onClose={() => { setAgentModalOpen(false); checkAgentStatus(); }} />
         </header>
 
-        {/* Global Alert & Confirm Modals for Header */}
+        {/* Global Alert & Confirm Modals */}
         {alertConfig.isOpen && (
             <div className="fixed top-0 left-0 w-screen h-[100dvh] z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 m-0">
                 <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-full max-w-sm p-5">
@@ -437,4 +471,3 @@ export default function Header({ toggleTheme, activeWorkspaceId, setActiveWorksp
         </>
     );
 }
-
