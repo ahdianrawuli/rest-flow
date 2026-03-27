@@ -428,21 +428,36 @@ export default function Requests({ activeWorkspaceId }) {
             const assertionsToRun = currentRequest.assertions.filter(a => a.value && a.value.trim() !== '');
             let responseBodyStr = typeof response.data === 'object' ? JSON.stringify(response.data) : (response.data || '');
 
+            // PERBAIKAN LOGIKA ASSERTION: Menyelaraskan dengan logika di Scenarios.jsx
             assertionsToRun.forEach(a => {
                 let passed = false;
                 try {
-                    if (a.type === 'status') {
-                        if (a.operator === 'equals') passed = response.status.toString() === a.value;
-                        else if (a.operator === 'contains') passed = response.status.toString().includes(a.value);
-                        else if (a.operator === 'less_than') passed = parseInt(response.status) < parseInt(a.value);
-                    } else if (a.type === 'time') {
-                        if (a.operator === 'equals') passed = parseInt(response.time) === parseInt(a.value);
-                        else if (a.operator === 'less_than') passed = parseInt(response.time) < parseInt(a.value);
-                    } else if (a.type === 'body_contains') {
-                        if (a.operator === 'contains') passed = responseBodyStr.includes(a.value);
-                        else if (a.operator === 'equals') passed = responseBodyStr === a.value;
+                    let targetValue = '';
+                    
+                    // 1. Ekstraksi Target Value berdasarkan tipe assertion
+                    if (a.type === 'status') targetValue = response.status.toString();
+                    else if (a.type === 'time') targetValue = parseInt(response.time);
+                    else if (a.type === 'body' || a.type === 'body_contains') targetValue = responseBodyStr;
+                    else if (a.type === 'header') targetValue = JSON.stringify(response.headers || {});
+                    
+                    // 2. Evaluasi berdasarkan operator
+                    if (a.type === 'time') {
+                        const expectVal = parseInt(a.value);
+                        if (a.operator === 'equals') passed = targetValue === expectVal;
+                        else if (a.operator === 'not_equals') passed = targetValue !== expectVal;
+                        else if (a.operator === 'less_than') passed = targetValue < expectVal;
+                        else if (a.operator === 'greater_than') passed = targetValue > expectVal;
+                    } else {
+                        const expectValStr = a.value.toString();
+                        if (a.operator === 'equals') passed = targetValue === expectValStr;
+                        else if (a.operator === 'not_equals') passed = targetValue !== expectValStr;
+                        else if (a.operator === 'contains') passed = targetValue.includes(expectValStr);
+                        else if (a.operator === 'not_contains') passed = !targetValue.includes(expectValStr);
+                        else if (a.operator === 'less_than') passed = parseInt(targetValue) < parseInt(expectValStr);
+                        else if (a.operator === 'greater_than') passed = parseInt(targetValue) > parseInt(expectValStr);
                     }
-                } catch(e) {}
+                } catch(e) { passed = false; }
+                
                 assertionsResults.push({ ...a, passed });
             });
 
