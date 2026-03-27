@@ -59,7 +59,13 @@ To test a local endpoint (e.g., an API you are developing on port 8080 on your m
    cd restflow-agent
 
  * Run the agent using Go:
-   go run main.go
+   env GOOS=darwin GOARCH=arm64 go build -o restflow-agent-mac-arm main.go
+
+   env GOOS=darwin GOARCH=amd64 go build -o restflow-agent-mac-intel main.go
+
+   env GOOS=linux GOARCH=amd64 go build -o restflow-agent-linux main.go
+
+   env GOOS=android GOARCH=arm64 go build -o restflow-agent-android-arm64 main.go
 
  * Enter the WebSocket URL and Token when prompted in the terminal. Now, all requests to localhost from Resty Flow will be securely tunneled to your machine!
 🤝 Contributing
