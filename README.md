@@ -68,6 +68,4 @@ This is an Open Source project. If you find any bugs, have feature requests, or 
 Distributed under the MIT License. See the LICENSE file for more information.
 Powered by AI, built for Developers. Take your team's productivity to the next level.
 
-**Catatan:** Jangan lupa untuk mengganti tautan `https://github.com/your-username/resty-flow.git` pada langkah **Clone the Repository** dengan tautan repositori GitHub Anda yang sebenarnya ya!
-
 
