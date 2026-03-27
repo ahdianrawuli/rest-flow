@@ -41,7 +41,7 @@ The easiest way to run Resty Flow locally is by using **Docker Compose**. Make s
 
 1. **Clone the Repository:**
    ```bash
-   git clone [https://github.com/your-username/resty-flow.git](https://github.com/your-username/resty-flow.git)
+   git clone git@github.com:ahdianrawuli/rest-flow.git
    cd resty-flow
 
  * Run with Docker Compose:
