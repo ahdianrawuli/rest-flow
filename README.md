@@ -56,6 +56,7 @@ The easiest way to run Resty Flow locally is by using **Docker Compose**. Make s
 To test a local endpoint (e.g., an API you are developing on port 8080 on your machine) using a cloud-hosted Resty Flow instance:
  * Get your Agent Token and WebSocket URL from the "Local Agent" menu in the Resty Flow dashboard.
  * Navigate to the agent directory:
+   ```bash
    cd restflow-agent
 
  * Run the agent using Go:
