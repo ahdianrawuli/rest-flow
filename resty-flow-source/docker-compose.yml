@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  resty-flow-db:
+    image: mariadb:10.11
+    container_name: resty-flow-db
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_USER: restflow
+      MARIADB_PASSWORD: restflow_pass
+      MARIADB_DATABASE: app_db
+    volumes:
+      - ./db-data:/var/lib/mysql
+      - ./database.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - autodev-net
+    expose:
+      - "3306"
+
+  resty-flow-api:
+    build: ./backend
+    container_name: resty-flow-api
+    image: resty-flow-api-image
+    environment:
+      DB_HOST: resty-flow-db
+      DB_USER: restflow
+      DB_PASSWORD: restflow_pass
+      DB_NAME: app_db
+      JWT_SECRET: super-secret-key-123
+      PORT: 8080
+    depends_on:
+      - resty-flow-db
+    networks:
+      - autodev-net
+    expose:
+      - "8080"
+
+  resty-flow-app:
+    build: ./frontend
+    container_name: resty-flow-app
+    image: resty-flow-app-image
+    depends_on:
+      - resty-flow-api
+    networks:
+      - autodev-net
+    expose:
+      - "80"
+
+networks:
+  autodev-net:
+    external: true

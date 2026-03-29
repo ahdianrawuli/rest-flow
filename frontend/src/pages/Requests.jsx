@@ -5,6 +5,7 @@ import RequestEditor from '../components/RequestEditor';
 
 export default function Requests({ activeWorkspaceId }) {
     const [requestsHistory, setRequestsHistory] = useState([]);
+    const [executionHistories, setExecutionHistories] = useState([]); // HISTORY TAB STATE
     const [foldersList, setFoldersList] = useState([]);
     const [variablesList, setVariablesList] = useState([]);
     const [currentRequest, setCurrentRequest] = useState(getEmptyRequest());
@@ -65,12 +66,15 @@ export default function Requests({ activeWorkspaceId }) {
 
     const loadHistory = async () => {
         try {
-            const [folders, requests] = await Promise.all([
+            const token = localStorage.getItem('rf_token');
+            const [folders, requests, execHistoryRes] = await Promise.all([
                 ApiService.getFolders(activeWorkspaceId),
-                ApiService.getRequests(activeWorkspaceId)
+                ApiService.getRequests(activeWorkspaceId),
+                fetch(`/api/workspaces/${activeWorkspaceId}/history`, { headers: {'Authorization': `Bearer ${token}`} }).then(r => r.ok ? r.json() : [])
             ]);
             setFoldersList(folders || []);
             setRequestsHistory(requests || []);
+            setExecutionHistories(execHistoryRes || []);
         } catch (e) { console.error(e); }
     };
 
@@ -103,7 +107,6 @@ export default function Requests({ activeWorkspaceId }) {
             if (fData.length === 0 || fData[fData.length - 1].key !== '') fData.push({ key: '', value: '', type: 'text', file: null });
             if (urlData.length === 0 || urlData[urlData.length - 1].key !== '') urlData.push({ key: '', value: '' });
 
-            // PERBAIKAN BUG 1: Parsing Parameter Manual (Aman untuk Variabel {{...}})
             let parsedParams = [{ key: '', value: '' }];
             if (req.url && req.url.includes('?')) {
                 const queryString = req.url.split('?').slice(1).join('?');
@@ -237,7 +240,6 @@ export default function Requests({ activeWorkspaceId }) {
                     newReq.body = typeof r.body === 'string' ? r.body : (r.body ? JSON.stringify(r.body) : '');
                 }
 
-                // PERBAIKAN BUG 1: Parsing Parameter Manual untuk Injeksi
                 if (newReq.url && newReq.url.includes('?')) {
                     const queryString = newReq.url.split('?').slice(1).join('?');
                     const searchParams = new URLSearchParams(queryString);
@@ -301,7 +303,6 @@ export default function Requests({ activeWorkspaceId }) {
 
                 newReq.name = 'Imported cURL';
                 
-                // PERBAIKAN BUG 1: Parsing Parameter Manual untuk cURL
                 if (newReq.url && newReq.url.includes('?')) {
                     const queryString = newReq.url.split('?').slice(1).join('?');
                     const searchParams = new URLSearchParams(queryString);
@@ -321,20 +322,11 @@ export default function Requests({ activeWorkspaceId }) {
             else if (newReq.bodyType === 'urlencoded') finalBody = JSON.stringify(newReq.urlencoded.filter(f => f.key.trim() !== ''));
 
             const payload = {
-                id: null, 
-                folder_id: newReq.folder_id, 
-                name: newReq.name,
-                method: newReq.method, 
-                url: newReq.url, 
-                headers: JSON.stringify(cleanHeaders), 
-                bodyType: newReq.bodyType, 
-                body_type: newReq.bodyType, 
-                body: finalBody, 
-                assertions: JSON.stringify(cleanAssertions), 
-                authorization: JSON.stringify(newReq.authorization), 
-                pre_request_script: newReq.pre_request_script, 
-                post_request_script: newReq.post_request_script,
-                description: newReq.description || ''
+                id: null, folder_id: newReq.folder_id, name: newReq.name, method: newReq.method, 
+                url: newReq.url, headers: JSON.stringify(cleanHeaders), bodyType: newReq.bodyType, 
+                body_type: newReq.bodyType, body: finalBody, assertions: JSON.stringify(cleanAssertions), 
+                authorization: JSON.stringify(newReq.authorization), pre_request_script: newReq.pre_request_script, 
+                post_request_script: newReq.post_request_script, description: newReq.description || ''
             };
 
             const result = await ApiService.saveRequest(activeWorkspaceId, payload);
@@ -353,6 +345,7 @@ export default function Requests({ activeWorkspaceId }) {
         <div className="flex-grow flex overflow-hidden w-full h-full relative">
             <RequestsSidebar
                 activeWorkspaceId={activeWorkspaceId} foldersList={foldersList} requestsHistory={requestsHistory}
+                executionHistories={executionHistories} // Meneruskan Prop Tab History
                 currentRequest={currentRequest} setCurrentRequest={setCurrentRequest} sidebarOpen={sidebarOpen}
                 setSidebarOpen={setSidebarOpen} loadHistory={loadHistory} handleLoadRequest={handleLoadRequest} getEmptyRequest={getEmptyRequest}
             />
@@ -360,128 +353,15 @@ export default function Requests({ activeWorkspaceId }) {
             {sidebarOpen && <div className="fixed inset-0 bg-black/50 z-20 md:hidden" onClick={() => setSidebarOpen(false)}></div>}
 
             <RequestEditor
+                activeWorkspaceId={activeWorkspaceId} // Diteruskan untuk kebutuhan endpoint Envs
                 currentRequest={currentRequest} setCurrentRequest={setCurrentRequest} foldersList={foldersList}
-                responseState={responseState} sendRequest={async (e) => {
-                    e.preventDefault();
-                    if (!currentRequest.url) return;
-
-                    setResponseState({ loading: true, data: null, error: null, time: 0, assertions: [] });
-
-                    let context = {
-                        request: { url: currentRequest.url, method: currentRequest.method, headers: [...currentRequest.headers], body: currentRequest.body },
-                        response: null,
-                        variables: variablesList.reduce((acc, v) => ({ ...acc, [v.var_key]: v.var_value }), {})
-                    };
-
-                    const applyVariables = (text) => {
-                        if (!text) return text; let result = text;
-                        variablesList.forEach(v => {
-                            if (v.var_key && v.var_value) {
-                                const regex = new RegExp(`{{${v.var_key}}}`, 'g');
-                                result = result.replace(regex, v.var_value);
-                            }
-                        });
-                        return result;
-                    };
-
-                    try {
-                        const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-                        if(currentRequest.pre_request_script) {
-                            const preFunc = new AsyncFunction('request', 'response', 'variables', currentRequest.pre_request_script);
-                            await preFunc(context.request, context.response, context.variables);
-                        }
-                    } catch (e) {}
-
-                    let url = applyVariables(context.request.url);
-                    let finalUrl;
-                    try { finalUrl = new URL(url); } 
-                    catch (err) { return setResponseState({ loading: false, data: null, error: 'Invalid URL format', time: 0, assertions: [] }); }
-
-                    let finalHeaders = context.request.headers.filter(h => h.key.trim() !== '').map(h => ({ key: applyVariables(h.key), value: applyVariables(h.value) }));
-
-                    const auth = currentRequest.authorization;
-                    if (auth.type === 'bearer' && auth.token) {
-                        finalHeaders.push({ key: 'Authorization', value: `Bearer ${applyVariables(auth.token)}` });
-                    } else if (auth.type === 'basic' && auth.username) {
-                        finalHeaders.push({ key: 'Authorization', value: `Basic ${btoa(`${applyVariables(auth.username)}:${applyVariables(auth.password)}`)}` });
-                    } else if (auth.type === 'apikey' && auth.apikey) {
-                        if (auth.addto === 'header') finalHeaders.push({ key: applyVariables(auth.apikey), value: applyVariables(auth.apivalue) });
-                        else finalUrl.searchParams.append(applyVariables(auth.apikey), applyVariables(auth.apivalue));
-                    }
-
-                    try {
-                        const rawBody = ['json', 'xml', 'text', 'html'].includes(currentRequest.bodyType) ? context.request.body : '';
-                        const processedBody = applyVariables(rawBody);
-
-                        const proxyData = {
-                            method: context.request.method, url: finalUrl.toString(), headersStr: JSON.stringify(finalHeaders),
-                            bodyType: currentRequest.bodyType, bodyContent: processedBody,
-                            formDataEntries: currentRequest.bodyType === 'form-data' ? currentRequest.formData.filter(f => f.key.trim() !== '') : [],
-                            urlencodedEntries: currentRequest.bodyType === 'urlencoded' ? currentRequest.urlencoded.filter(f => f.key.trim() !== '') : []
-                        };
-
-                        const response = await ApiService.proxyRequest(proxyData);
-                        context.response = response;
-
-                        try {
-                            const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-                            if(currentRequest.post_request_script) {
-                                const postFunc = new AsyncFunction('request', 'response', 'variables', currentRequest.post_request_script);
-                                await postFunc(context.request, context.response, context.variables);
-                            }
-                        } catch (e) {}
-
-                        let variablesUpdated = false;
-                        for (const key in context.variables) {
-                            const existingVar = variablesList.find(v => v.var_key === key);
-                            if (!existingVar || existingVar.var_value !== context.variables[key]) {
-                                try { await ApiService.saveVariable(activeWorkspaceId, key, context.variables[key]); variablesUpdated = true; } catch(err) {}
-                            }
-                        }
-                        if (variablesUpdated) loadVariables(); 
-
-                        const assertionsResults = [];
-                        const assertionsToRun = currentRequest.assertions.filter(a => a.value && a.value.trim() !== '');
-                        let responseBodyStr = typeof response.data === 'object' ? JSON.stringify(response.data) : (response.data || '');
-
-                        assertionsToRun.forEach(a => {
-                            let passed = false;
-                            try {
-                                let targetValue = '';
-                                if (a.type === 'status') targetValue = response.status.toString();
-                                else if (a.type === 'time') targetValue = parseInt(response.time);
-                                else if (a.type === 'body' || a.type === 'body_contains') targetValue = responseBodyStr;
-                                else if (a.type === 'header') targetValue = JSON.stringify(response.headers || {});
-                                
-                                if (a.type === 'time') {
-                                    const expectVal = parseInt(a.value);
-                                    if (a.operator === 'equals') passed = targetValue === expectVal;
-                                    else if (a.operator === 'not_equals') passed = targetValue !== expectVal;
-                                    else if (a.operator === 'less_than') passed = targetValue < expectVal;
-                                    else if (a.operator === 'greater_than') passed = targetValue > expectVal;
-                                } else {
-                                    const expectValStr = a.value.toString();
-                                    if (a.operator === 'equals') passed = targetValue === expectValStr;
-                                    else if (a.operator === 'not_equals') passed = targetValue !== expectValStr;
-                                    else if (a.operator === 'contains') passed = targetValue.includes(expectValStr);
-                                    else if (a.operator === 'not_contains') passed = !targetValue.includes(expectValStr);
-                                    else if (a.operator === 'less_than') passed = parseInt(targetValue) < parseInt(expectValStr);
-                                    else if (a.operator === 'greater_than') passed = parseInt(targetValue) > parseInt(expectValStr);
-                                }
-                            } catch(e) { passed = false; }
-                            assertionsResults.push({ ...a, passed });
-                        });
-
-                        setResponseState({ loading: false, data: response, error: null, time: response.time, assertions: assertionsResults });
-                    } catch (err) {
-                        setResponseState({ loading: false, data: null, error: err.message, time: 0, assertions: [] });
-                    }
-                }} handleSaveRequest={handleSaveRequest}
+                variablesList={variablesList} loadHistory={loadHistory} // Diteruskan agar logic proxy tahu variabel
+                responseState={responseState} setResponseState={setResponseState} handleSaveRequest={handleSaveRequest}
                 handleDeleteRequest={handleDeleteRequestTrigger} setSidebarOpen={setSidebarOpen} setImportModalOpen={setImportModalOpen}
                 showAlert={showAlert}
             />
 
-            {/* Import Modal */}
+            {/* Modals */}
             {importModalOpen && (
                 <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm m-0">
                     <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-lg overflow-hidden border border-gray-200 dark:border-slate-700">
@@ -513,9 +393,8 @@ export default function Requests({ activeWorkspaceId }) {
                 </div>
             )}
 
-            {/* Global Alert Modal */}
             {alertConfig.isOpen && (
-                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 m-0">
+                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm m-0">
                     <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-full max-w-sm p-5 transform transition-all">
                         <div className="flex items-center gap-3 mb-4">
                             <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
@@ -546,7 +425,6 @@ export default function Requests({ activeWorkspaceId }) {
                 </div>
             )}
 
-            {/* Confirm Delete Request Modal */}
             {deleteModalOpen && (
                 <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 m-0">
                     <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-full max-w-sm p-5 transform transition-all">

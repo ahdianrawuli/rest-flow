@@ -106,10 +106,13 @@ async function connectDB() {
         
         await pool.query(`ALTER TABLE requests ADD COLUMN description LONGTEXT DEFAULT NULL`).catch(()=>Object());
         await pool.query(`CREATE TABLE IF NOT EXISTS monitors (id INT AUTO_INCREMENT PRIMARY KEY, workspace_id INT NOT NULL, name VARCHAR(255) NOT NULL, folder_id INT NULL, schedule_cron VARCHAR(100) NOT NULL, is_active BOOLEAN DEFAULT TRUE, last_run_at TIMESTAMP NULL, last_run_status VARCHAR(50) NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`).catch(()=>Object());
-        // MIGRATION: Tabel Riwayat Cron
         await pool.query(`CREATE TABLE IF NOT EXISTS monitor_histories (id INT AUTO_INCREMENT PRIMARY KEY, monitor_id INT NOT NULL, status VARCHAR(50) NOT NULL, run_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (monitor_id) REFERENCES monitors(id) ON DELETE CASCADE)`).catch(()=>Object());
         await pool.query(`CREATE TABLE IF NOT EXISTS comments (id INT AUTO_INCREMENT PRIMARY KEY, request_id INT NOT NULL, user_id INT NOT NULL, content TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)`).catch(()=>Object());
         
+        await pool.query(`CREATE TABLE IF NOT EXISTS environments (id INT AUTO_INCREMENT PRIMARY KEY, workspace_id INT NOT NULL, name VARCHAR(255) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE)`).catch(()=>Object());
+        await pool.query(`CREATE TABLE IF NOT EXISTS environment_variables (id INT AUTO_INCREMENT PRIMARY KEY, environment_id INT NOT NULL, var_key VARCHAR(255) NOT NULL, var_value TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (environment_id) REFERENCES environments(id) ON DELETE CASCADE, UNIQUE KEY (environment_id, var_key))`).catch(()=>Object());
+        await pool.query(`CREATE TABLE IF NOT EXISTS request_histories (id INT AUTO_INCREMENT PRIMARY KEY, workspace_id INT NOT NULL, user_id INT NOT NULL, request_id INT NULL, name VARCHAR(255), method VARCHAR(10), url TEXT, status INT, time INT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)`).catch(()=>Object());
+
         await reloadMonitors();
     } catch(e) { console.error("Migration Error:", e.message); }
 }
@@ -130,7 +133,7 @@ const authenticateToken = (req, res, next) => {
 };
 
 // ==========================================
-// INJECT EXAMPLE WORKSPACE 
+// INJECT EXAMPLE WORKSPACE (SNAKE LAYOUT & FLAT STRUCTURE)
 // ==========================================
 async function injectExampleWorkspace(userId, workspaceId) {
     try {
@@ -145,6 +148,11 @@ async function injectExampleWorkspace(userId, workspaceId) {
             { k: "example_v_order_id", v: "" }, { k: "example_v_payment_id", v: "" }
         ];
         for (let v of vars) await pool.query('INSERT INTO variables (user_id, workspace_id, var_key, var_value) VALUES (?, ?, ?, ?)', [userId, workspaceId, v.k, v.v]);
+
+        const [envLocalRes] = await pool.query('INSERT INTO environments (workspace_id, name) VALUES (?, ?)', [workspaceId, 'Local Environment']);
+        await pool.query('INSERT INTO environment_variables (environment_id, var_key, var_value) VALUES (?, ?, ?)', [envLocalRes.insertId, 'example_v_base_url', 'http://localhost:3000/api']);
+        const [envProdRes] = await pool.query('INSERT INTO environments (workspace_id, name) VALUES (?, ?)', [workspaceId, 'Production Environment']);
+        await pool.query('INSERT INTO environment_variables (environment_id, var_key, var_value) VALUES (?, ?, ?)', [envProdRes.insertId, 'example_v_base_url', 'https://api.production.com/v1']);
 
         const mockMap = {};
         const mocks = [
@@ -181,36 +189,53 @@ async function injectExampleWorkspace(userId, workspaceId) {
             reqMap[r.oldId] = rRes.insertId;
         }
 
+        // PERBAIKAN: Flat Data Structure agar Scenarios.jsx dapat membaca koordinat x dan y, name, iterasi, method dll
+        // Layout: Ular (Kanan, lalu Bawah, lalu Kiri, lalu Bawah, lalu Kanan)
         const fullNodes = [
+          // Baris 1: Kiri ke Kanan
           { id: "n1", type: "request", refId: reqMap[101], name: "1. Login User", method: "POST", iterations: 1, delay: 0, x: 100, y: 100 },
           { id: "n2", type: "request", refId: reqMap[102], name: "2. Get Profile", method: "GET", iterations: 1, delay: 0, x: 450, y: 100 },
           { id: "n3", type: "mock", refId: mockMap[203], name: "example_mocks_loyalty", method: "GET", iterations: 1, delay: 0, x: 800, y: 100 },
           { id: "n4", type: "request", refId: reqMap[103], name: "3. Create Cart", method: "POST", iterations: 1, delay: 0, x: 1150, y: 100 },
+          
+          // Baris 2: Kanan ke Kiri
           { id: "n5", type: "request", refId: reqMap[104], name: "4. Add Item to Cart", method: "POST", iterations: 1, delay: 0, x: 1150, y: 300 },
           { id: "n6", type: "request", refId: reqMap[105], name: "5. Apply Promo Code", method: "PUT", iterations: 1, delay: 0, x: 800, y: 300 },
           { id: "n7", type: "mock", refId: mockMap[202], name: "example_mocks_fraud_check", method: "POST", iterations: 1, delay: 0, x: 450, y: 300 },
           { id: "n8", type: "request", refId: reqMap[106], name: "6. Checkout Order", method: "POST", iterations: 1, delay: 0, x: 100, y: 300 },
+          
+          // Baris 3: Kiri ke Kanan
           { id: "n9", type: "request", refId: reqMap[107], name: "7. Get Payment Options", method: "GET", iterations: 1, delay: 0, x: 100, y: 500 },
           { id: "n10", type: "request", refId: reqMap[108], name: "8. Initiate Payment", method: "POST", iterations: 1, delay: 0, x: 450, y: 500 },
           { id: "n11", type: "mock", refId: mockMap[201], name: "example_mocks_bank_verify", method: "POST", iterations: 1, delay: 0, x: 800, y: 500 },
           { id: "n12", type: "mock", refId: mockMap[204], name: "example_mocks_pg_callback", method: "POST", iterations: 1, delay: 0, x: 1150, y: 500 },
+          
+          // Baris 4: Kanan ke Kiri
           { id: "n13", type: "request", refId: reqMap[109], name: "9. Check Payment Status", method: "GET", iterations: 1, delay: 0, x: 1150, y: 700 },
           { id: "n14", type: "request", refId: reqMap[110], name: "10. Get Receipt", method: "GET", iterations: 1, delay: 0, x: 800, y: 700 }
         ];
 
+        // Menyambungkan Handle Port sesuai layout ularnya (Smoothstep)
         const fullEdges = [
+          // Baris 1: Arah Kanan
           { id: "e1", source: "n1", sourceHandle: "right", target: "n2", targetHandle: "left" },
           { id: "e2", source: "n2", sourceHandle: "right", target: "n3", targetHandle: "left" },
           { id: "e3", source: "n3", sourceHandle: "right", target: "n4", targetHandle: "left" },
+          // Turun
           { id: "e4", source: "n4", sourceHandle: "bottom", target: "n5", targetHandle: "top" },
+          // Baris 2: Arah Kiri
           { id: "e5", source: "n5", sourceHandle: "left", target: "n6", targetHandle: "right" },
           { id: "e6", source: "n6", sourceHandle: "left", target: "n7", targetHandle: "right" },
           { id: "e7", source: "n7", sourceHandle: "left", target: "n8", targetHandle: "right" },
+          // Turun
           { id: "e8", source: "n8", sourceHandle: "bottom", target: "n9", targetHandle: "top" },
+          // Baris 3: Arah Kanan
           { id: "e9", source: "n9", sourceHandle: "right", target: "n10", targetHandle: "left" },
           { id: "e10", source: "n10", sourceHandle: "right", target: "n11", targetHandle: "left" },
           { id: "e11", source: "n11", sourceHandle: "right", target: "n12", targetHandle: "left" },
+          // Turun
           { id: "e12", source: "n12", sourceHandle: "bottom", target: "n13", targetHandle: "top" },
+          // Baris 4: Arah Kiri
           { id: "e13", source: "n13", sourceHandle: "left", target: "n14", targetHandle: "right" }
         ];
 
@@ -400,6 +425,35 @@ app.delete('/api/workspaces/:id', authenticateToken, async (req, res) => {
     } catch (error) { res.status(500).json({ error: 'Error' }); }
 });
 
+app.get('/api/workspaces/:workspaceId/environments', authenticateToken, async (req, res) => {
+    try { const [rows] = await pool.query('SELECT * FROM environments WHERE workspace_id = ? ORDER BY created_at ASC', [req.params.workspaceId]); res.json(rows); } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
+app.post('/api/workspaces/:workspaceId/environments', authenticateToken, async (req, res) => {
+    try { const [r] = await pool.query('INSERT INTO environments (workspace_id, name) VALUES (?, ?)', [req.params.workspaceId, req.body.name]); res.status(201).json({ id: r.insertId, name: req.body.name }); } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
+app.delete('/api/environments/:id', authenticateToken, async (req, res) => {
+    try { await pool.query('DELETE FROM environments WHERE id = ?', [req.params.id]); res.json({ message: 'Deleted' }); } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
+app.get('/api/environments/:id/variables', authenticateToken, async (req, res) => {
+    try { const [rows] = await pool.query('SELECT * FROM environment_variables WHERE environment_id = ? ORDER BY var_key ASC', [req.params.id]); res.json(rows); } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
+app.post('/api/environments/:id/variables', authenticateToken, async (req, res) => {
+    try { await pool.query('INSERT INTO environment_variables (environment_id, var_key, var_value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE var_value = ?', [req.params.id, req.body.var_key, req.body.var_value, req.body.var_value]); res.status(201).json({ message: 'Saved' }); } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
+app.delete('/api/environments/variables/:id', authenticateToken, async (req, res) => {
+    try { await pool.query('DELETE FROM environment_variables WHERE id = ?', [req.params.id]); res.json({ message: 'Deleted' }); } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
+
+app.get('/api/workspaces/:workspaceId/history', authenticateToken, async (req, res) => {
+    try { const [rows] = await pool.query('SELECT * FROM request_histories WHERE workspace_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 50', [req.params.workspaceId, req.user.id]); res.json(rows); } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
+app.post('/api/workspaces/:workspaceId/history', authenticateToken, async (req, res) => {
+    try { const { request_id, name, method, url, status, time } = req.body; await pool.query('INSERT INTO request_histories (workspace_id, user_id, request_id, name, method, url, status, time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [req.params.workspaceId, req.user.id, request_id || null, name || 'Untitled', method, url, status, time]); res.status(201).json({ message: 'Logged' }); } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
+app.delete('/api/workspaces/:workspaceId/history', authenticateToken, async (req, res) => {
+    try { await pool.query('DELETE FROM request_histories WHERE workspace_id = ? AND user_id = ?', [req.params.workspaceId, req.user.id]); res.json({ message: 'Cleared' }); } catch (e) { res.status(500).json({ error: 'Error' }); }
+});
+
 app.get('/api/workspaces/:workspaceId/folders', authenticateToken, async (req, res) => { try { const [rows] = await pool.query('SELECT * FROM folders WHERE workspace_id = ? ORDER BY created_at ASC', [req.params.workspaceId]); res.json(rows); } catch (e) { res.status(500).json({ error: 'Error' }); } });
 app.post('/api/workspaces/:workspaceId/folders', authenticateToken, async (req, res) => { try { const [r] = await pool.query('INSERT INTO folders (workspace_id, name) VALUES (?, ?)', [req.params.workspaceId, req.body.name]); res.status(201).json({ id: r.insertId, name: req.body.name }); } catch (e) { res.status(500).json({ error: 'Error' }); } });
 app.delete('/api/workspaces/:workspaceId/folders/:id', authenticateToken, async (req, res) => { try { await pool.query('DELETE FROM folders WHERE id = ? AND workspace_id = ?', [req.params.id, req.params.workspaceId]); res.json({ message: 'Deleted' }); } catch (e) { res.status(500).json({ error: 'Error' }); } });
@@ -480,7 +534,6 @@ app.get('/api/requests/:requestId/comments', authenticateToken, async (req, res)
         res.json(rows);
     } catch (e) { res.status(500).json({ error: 'Error fetching comments' }); }
 });
-
 app.post('/api/requests/:requestId/comments', authenticateToken, async (req, res) => {
     try {
         const [r] = await pool.query('INSERT INTO comments (request_id, user_id, content) VALUES (?, ?, ?)', [req.params.requestId, req.user.id, req.body.content]);
@@ -495,15 +548,12 @@ app.get('/api/workspaces/:workspaceId/monitors', authenticateToken, async (req, 
         res.json(rows);
     } catch (e) { res.status(500).json({ error: 'Error fetching monitors' }); }
 });
-
-// GET ENDPOINT UNTUK HISTORI MONITOR
 app.get('/api/workspaces/:workspaceId/monitors/:id/history', authenticateToken, async (req, res) => {
     try {
         const [rows] = await pool.query('SELECT * FROM monitor_histories WHERE monitor_id = ? ORDER BY run_at DESC LIMIT 10', [req.params.id]);
         res.json(rows);
     } catch (e) { res.status(500).json({ error: 'Error fetching monitor history' }); }
 });
-
 app.post('/api/workspaces/:workspaceId/monitors', authenticateToken, async (req, res) => {
     try {
         const { name, folder_id, schedule_cron, is_active } = req.body;
@@ -513,7 +563,6 @@ app.post('/api/workspaces/:workspaceId/monitors', authenticateToken, async (req,
         res.status(201).json({ id: r.insertId });
     } catch (e) { res.status(500).json({ error: 'Error creating monitor' }); }
 });
-
 app.delete('/api/workspaces/:workspaceId/monitors/:id', authenticateToken, async (req, res) => {
     try {
         await pool.query('DELETE FROM monitors WHERE id=? AND workspace_id=?', [req.params.id, req.params.workspaceId]);

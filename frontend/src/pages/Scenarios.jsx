@@ -8,6 +8,11 @@ export default function Scenarios({ activeWorkspaceId }) {
     const [folders, setFolders] = useState([]);
     const [variablesList, setVariablesList] = useState([]);
 
+    // --- STATE UNTUK ENVIRONMENT ---
+    const [environments, setEnvironments] = useState([]);
+    const [activeEnvId, setActiveEnvId] = useState('');
+    const [envVariablesMap, setEnvVariablesMap] = useState({});
+
     const [sidebarOpen, setSidebarOpen] = useState(false);
     
     const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState(true);
@@ -55,12 +60,33 @@ export default function Scenarios({ activeWorkspaceId }) {
 
     useEffect(() => { scenarioRef.current = currentScenario; }, [currentScenario]);
 
+    // PERBAIKAN: Sinkronisasi ID saat ganti workspace agar tidak bocor
     useEffect(() => {
         if (activeWorkspaceId) {
+            setActiveEnvId(localStorage.getItem(`rf_env_${activeWorkspaceId}`) || '');
             loadLibraryData();
             loadScenarios();
+            fetchEnvironments(); 
         }
     }, [activeWorkspaceId]);
+
+    const fetchEnvironments = async () => {
+        if (!activeWorkspaceId) return;
+        try {
+            const token = localStorage.getItem('rf_token');
+            const res = await fetch(`/api/workspaces/${activeWorkspaceId}/environments`, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (res.ok) {
+                const data = await res.json();
+                setEnvironments(data);
+                const map = {};
+                for (const env of data) {
+                    const resVar = await fetch(`/api/environments/${env.id}/variables`, { headers: { 'Authorization': `Bearer ${token}` } });
+                    if (resVar.ok) map[env.id] = await resVar.json();
+                }
+                setEnvVariablesMap(map);
+            }
+        } catch(e) {}
+    };
 
     const loadLibraryData = async () => {
         try {
@@ -296,14 +322,13 @@ export default function Scenarios({ activeWorkspaceId }) {
             path.setAttribute('fill', 'none'); 
             path.classList.add('flow-line');
 
-            // PERBAIKAN: pointer-events-auto dipasang agar klik berhasil masuk
             const clickPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             clickPath.setAttribute('d', `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`);
             clickPath.setAttribute('stroke', 'transparent'); clickPath.setAttribute('stroke-width', '25'); clickPath.setAttribute('fill', 'none'); 
             clickPath.classList.add('edge-delete', 'cursor-pointer', 'pointer-events-auto');
             
             clickPath.addEventListener('click', (e) => {
-                e.stopPropagation(); // Mencegah klik menyebar ke canvas di belakang
+                e.stopPropagation();
                 removeEdgeTrigger(edge.id);
             });
 
@@ -326,8 +351,9 @@ export default function Scenarios({ activeWorkspaceId }) {
     const runScript = async (scriptCode, context) => {
         if (!scriptCode || scriptCode.trim() === '') return context;
         try {
-            const func = new Function('request', 'response', 'variables', scriptCode);
-            func(context.request, context.response, context.variables);
+            const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+            const func = new AsyncFunction('request', 'response', 'variables', scriptCode);
+            await func(context.request, context.response, context.variables);
         } catch (e) { console.error('Script error:', e); }
         return context;
     };
@@ -338,9 +364,6 @@ export default function Scenarios({ activeWorkspaceId }) {
         try { return JSON.stringify(JSON.parse(data), null, 2); } catch(e) { return data; }
     };
 
-    // =====================================
-    // EKSPOR KE EXCEL HELPER
-    // =====================================
     const exportHTMLToExcel = (title, date, tableHTML, filename) => {
         const html = `
             <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
@@ -449,266 +472,289 @@ export default function Scenarios({ activeWorkspaceId }) {
         exportHTMLToExcel(title, date, tableHTML, `PerformanceReport_${currentScenario.name.replace(/\s+/g, '_')}`);
     };
 
-    // =====================================
-    // RUNNER: API FLOW TEST
-    // =====================================
+    // PERLINDUNGAN UPDATE STATE (Cegah balapan saat multiple node eksekusi)
+    const updateNodeStatus = (id, status, text, prog = '') => {
+        setCurrentScenario(prev => {
+            if (!prev.nodes) return prev;
+            return { ...prev, nodes: prev.nodes.map(n => n.id === id ? { ...n, runStatus: { status, text, prog } } : n) };
+        });
+    };
+
+    const updateEdgeStatus = (edgeList, status) => {
+        if (!edgeList || edgeList.length === 0) return;
+        setCurrentScenario(prev => {
+            if (!prev.edges) return prev;
+            const newEdges = [...prev.edges]; 
+            edgeList.forEach(edge => { 
+                const e = newEdges.find(ne => ne.id === edge.id); 
+                if (e) e.runtimeStatus = status; 
+            });
+            return { ...prev, edges: newEdges };
+        });
+    };
+
     const runApiFlowTest = async () => {
         if (currentScenario.nodes.length === 0) return showAlert('No nodes to run', 'warning');
         setIsRunning(true); abortRef.current = false;
         setLogs([]); setLogsOpen(true); 
         setApiFlowReport(null);
         setExpandedFlowItem(null);
-        appendLog(`Starting API Flow Test: ${currentScenario.name}`, 'info');
+        
+        try {
+            appendLog(`Starting API Flow Test: ${currentScenario.name}`, 'info');
 
-        let runtimeVariables = [...variablesList];
-        const flowResultsList = [];
-
-        const applyVariablesToText = (text, varsArr) => {
-            if (!text) return text; let result = String(text);
-            varsArr.forEach(v => { if (v.var_key && v.var_value) result = result.replace(new RegExp(`\\{\\{${v.var_key}\\}\\}`, 'g'), v.var_value); });
-            return result;
-        };
-
-        const nodesCopy = [...currentScenario.nodes]; nodesCopy.forEach(n => { n.runStatus = null; });
-        const edgesCopy = [...currentScenario.edges]; edgesCopy.forEach(e => { delete e.runtimeStatus; });
-        setCurrentScenario(prev => ({ ...prev, nodes: nodesCopy, edges: edgesCopy }));
-
-        let inDegree = {}; let adj = {};
-        currentScenario.nodes.forEach(n => { inDegree[n.id] = 0; adj[n.id] = []; });
-        currentScenario.edges.forEach(e => { if (inDegree[e.target] !== undefined) inDegree[e.target]++; if (adj[e.source]) adj[e.source].push(e); });
-
-        let startNodes = currentScenario.nodes.filter(n => inDegree[n.id] === 0);
-        if (startNodes.length === 0 && currentScenario.nodes.length > 0) startNodes.push(currentScenario.nodes[0]);
-
-        let scenarioSuccess = true; let visited = new Set();
-
-        const updateNodeStatus = (id, status, text, prog = '') => {
-            setCurrentScenario(prev => ({ ...prev, nodes: prev.nodes.map(n => n.id === id ? { ...n, runStatus: { status, text, prog } } : n) }));
-        };
-
-        const updateEdgeStatus = (edgeList, status) => {
-            setCurrentScenario(prev => {
-                const newEdges = [...prev.edges]; edgeList.forEach(edge => { const e = newEdges.find(ne => ne.id === edge.id); if (e) e.runtimeStatus = status; });
-                return { ...prev, edges: newEdges };
-            });
-        };
-
-        const executeNodeAsync = async (node) => {
-            if (visited.has(node.id) || abortRef.current) return;
-            visited.add(node.id);
-
-            const delayMs = parseInt(node.delay) || 0;
-            if (delayMs > 0) {
-                updateNodeStatus(node.id, 'waiting', 'Waiting...', '');
-                let remaining = delayMs;
-                while (remaining > 0 && !abortRef.current) {
-                    updateNodeStatus(node.id, 'waiting', `Waiting (${Math.ceil(remaining/1000)}s)...`, '');
-                    const step = Math.min(1000, remaining);
-                    await new Promise(r => setTimeout(r, step));
-                    remaining -= step;
-                }
+            let runtimeVariables = [...(variablesList || [])];
+            if (activeEnvId && envVariablesMap[activeEnvId]) {
+                envVariablesMap[activeEnvId].forEach(ev => {
+                    const idx = runtimeVariables.findIndex(g => g.var_key === ev.var_key);
+                    if (idx > -1) runtimeVariables[idx] = ev;
+                    else runtimeVariables.push(ev);
+                });
             }
 
-            if (abortRef.current) return;
-
-            updateNodeStatus(node.id, 'running', 'Running...', '');
-            const incomingEdges = currentScenario.edges.filter(e => e.target === node.id);
-            updateEdgeStatus(incomingEdges, 'running');
-
-            let nodeSuccess = true;
-            appendLog(`Executing: ${node.name}`, 'info');
-
-            let reqData = null;
-            if (node.type === 'request') reqData = requests.find(r => r.id === node.refId);
-            else if (node.type === 'mock') reqData = mocks.find(m => m.id === node.refId);
-
-            if (!reqData) {
-                appendLog(`Skipped: Data missing`, 'error');
-                nodeSuccess = false;
-            } else {
-                for (let iter = 1; iter <= node.iterations; iter++) {
-                    if (abortRef.current) break;
-                    updateNodeStatus(node.id, 'running', 'Running...', `${iter}/${node.iterations}`);
-                    
-                    let resultDetail = {
-                        nodeId: node.id,
-                        name: node.name,
-                        method: reqData.method,
-                        url: '',
-                        status: 0,
-                        time: 0,
-                        reqHeaders: '',
-                        reqBody: '',
-                        resHeaders: '',
-                        resBody: '',
-                        error: null
-                    };
-
-                    try {
-                        let responseStatus, responseTime = 0, responseBodyStr = '';
-                        if (node.type === 'request') {
-                            let rawHeaders = typeof reqData.headers === 'string' ? JSON.parse(reqData.headers) : (reqData.headers || []);
-                            let rawAuth = typeof reqData.authorization === 'string' ? JSON.parse(reqData.authorization) : (reqData.authorization || {});
-                            
-                            let context = { request: { url: reqData.url, method: reqData.method, headers: rawHeaders, body: reqData.body }, response: null, variables: runtimeVariables.reduce((acc, v) => ({ ...acc, [v.var_key]: v.var_value }), {}) };
-                            context = await runScript(reqData.pre_request_script, context);
-                            
-                            let url = applyVariablesToText(context.request.url, runtimeVariables); let finalUrl = new URL(url);
-                            let finalHeaders = context.request.headers.filter(h => h.key && h.key.trim() !== '').map(h => ({ key: applyVariablesToText(h.key, runtimeVariables), value: applyVariablesToText(h.value, runtimeVariables) }));
-
-                            if (rawAuth) {
-                                if (rawAuth.type === 'bearer' && rawAuth.token) { finalHeaders.push({ key: 'Authorization', value: `Bearer ${applyVariablesToText(rawAuth.token, runtimeVariables)}` }); } 
-                                else if (rawAuth.type === 'basic' && rawAuth.username) { finalHeaders.push({ key: 'Authorization', value: `Basic ${btoa(`${applyVariablesToText(rawAuth.username, runtimeVariables)}:${applyVariablesToText(rawAuth.password, runtimeVariables)}`)}` }); } 
-                                else if (rawAuth.type === 'apikey' && rawAuth.apikey) {
-                                    if (rawAuth.addto === 'header') finalHeaders.push({ key: applyVariablesToText(rawAuth.apikey, runtimeVariables), value: applyVariablesToText(rawAuth.apivalue, runtimeVariables) });
-                                    else finalUrl.searchParams.append(applyVariablesToText(rawAuth.apikey, runtimeVariables), applyVariablesToText(rawAuth.apivalue, runtimeVariables));
-                                }
-                            }
-
-                            let bType = reqData.bodyType || reqData.body_type || 'none';
-                            let rawBodyString = ['json', 'xml', 'text', 'html'].includes(bType) ? context.request.body : '';
-                            let processedBody = applyVariablesToText(rawBodyString, runtimeVariables);
-                            let formDataEntries = []; let urlencodedEntries = [];
-
-                            if (bType === 'form-data') {
-                                let fData = typeof reqData.body === 'string' ? JSON.parse(reqData.body) : (reqData.body || []);
-                                formDataEntries = fData.filter(f => f.key && f.key.trim() !== '').map(f => ({...f, key: applyVariablesToText(f.key, runtimeVariables), value: f.type === 'text' ? applyVariablesToText(f.value, runtimeVariables) : f.value}));
-                            } else if (bType === 'urlencoded') {
-                                let uData = typeof reqData.body === 'string' ? JSON.parse(reqData.body) : (reqData.body || []);
-                                urlencodedEntries = uData.filter(f => f.key && f.key.trim() !== '').map(f => ({...f, key: applyVariablesToText(f.key, runtimeVariables), value: applyVariablesToText(f.value, runtimeVariables)}));
-                            }
-
-                            const proxyData = { method: context.request.method, url: finalUrl.toString(), headersStr: JSON.stringify(finalHeaders), bodyType: bType, bodyContent: processedBody, formDataEntries, urlencodedEntries };
-                            
-                            resultDetail.url = finalUrl.toString();
-                            resultDetail.reqHeaders = proxyData.headersStr;
-                            resultDetail.reqBody = proxyData.bodyContent;
-
-                            const response = await ApiService.proxyRequest(proxyData);
-                            responseStatus = response.status; responseTime = response.time || 0;
-                            responseBodyStr = typeof response.data === 'object' ? JSON.stringify(response.data) : (response.data || '');
-                            context.response = response;
-
-                            resultDetail.status = responseStatus;
-                            resultDetail.time = responseTime;
-                            resultDetail.resHeaders = JSON.stringify(response.headers);
-                            resultDetail.resBody = responseBodyStr;
-
-                            await runScript(reqData.post_request_script, context);
-                            for (const key in context.variables) {
-                                const existingVar = runtimeVariables.find(v => v.var_key === key);
-                                if (!existingVar || String(existingVar.var_value) !== String(context.variables[key])) {
-                                    try {
-                                        await ApiService.saveVariable(activeWorkspaceId, key, context.variables[key]);
-                                        let vIdx = runtimeVariables.findIndex(v => v.var_key === key);
-                                        if(vIdx > -1) runtimeVariables[vIdx].var_value = context.variables[key];
-                                        else runtimeVariables.push({id: null, var_key: key, var_value: context.variables[key]});
-                                    } catch(e) {}
-                                }
-                            }
-
-                            let assertions = [];
-                            try { assertions = typeof reqData.assertions === 'string' ? JSON.parse(reqData.assertions) : (reqData.assertions || []); } catch(e) {}
-                            if (assertions && assertions.length > 0) {
-                                const hasFailures = assertions.some(a => {
-                                    if (!a.value || a.value.trim() === '') return false;
-                                    let passed = false;
-                                    try {
-                                        let targetValue = '';
-                                        
-                                        // 1. Ekstraksi Target Value
-                                        if (a.type === 'status') targetValue = responseStatus.toString();
-                                        else if (a.type === 'time') targetValue = parseInt(responseTime);
-                                        else if (a.type === 'body' || a.type === 'body_contains') targetValue = responseBodyStr;
-                                        else if (a.type === 'header') targetValue = JSON.stringify(response.headers || {});
-                                        
-                                        // 2. Evaluasi
-                                        if (a.type === 'time') {
-                                            const expectVal = parseInt(a.value);
-                                            if (a.operator === 'equals') passed = targetValue === expectVal;
-                                            else if (a.operator === 'not_equals') passed = targetValue !== expectVal;
-                                            else if (a.operator === 'less_than') passed = targetValue < expectVal;
-                                            else if (a.operator === 'greater_than') passed = targetValue > expectVal;
-                                        } else {
-                                            const expectValStr = a.value.toString();
-                                            if (a.operator === 'equals') passed = targetValue === expectValStr;
-                                            else if (a.operator === 'not_equals') passed = targetValue !== expectValStr;
-                                            else if (a.operator === 'contains') passed = targetValue.includes(expectValStr);
-                                            else if (a.operator === 'not_contains') passed = !targetValue.includes(expectValStr);
-                                            else if (a.operator === 'less_than') passed = parseInt(targetValue) < parseInt(expectValStr);
-                                            else if (a.operator === 'greater_than') passed = parseInt(targetValue) > parseInt(expectValStr);
-                                        }
-                                    } catch(e) { passed = false; }
-                                    
-                                    return !passed; 
-                                });
-                                if (hasFailures) throw new Error(`Assertion failed on iter ${iter}`);
-                            }
-                        } else {
-                            const url = `${window.location.origin}/api/mock/${activeWorkspaceId}${reqData.path.startsWith('/') ? reqData.path : '/' + reqData.path}`;
-                            resultDetail.url = url;
-                            const reqStart = Date.now();
-                            const response = await fetch(url, { method: reqData.method });
-                            responseStatus = response.status;
-                            
-                            resultDetail.status = responseStatus;
-                            resultDetail.time = Date.now() - reqStart;
-                            resultDetail.resHeaders = JSON.stringify(Object.fromEntries(response.headers.entries()));
-                            resultDetail.resBody = await response.text();
-
-                            if (responseStatus !== parseInt(reqData.status)) throw new Error(`Expected ${reqData.status}, got ${responseStatus}`);
-                        }
-
-                        appendLog(`  Iter ${iter}: HTTP ${responseStatus}`, responseStatus >= 200 && responseStatus < 300 ? 'success' : 'warning');
-                        if (iter < node.iterations) await new Promise(r => setTimeout(r, 200));
-
-                    } catch (e) {
-                        appendLog(`  Iter ${iter} Error: ${e.message}`, 'error');
-                        resultDetail.error = e.message;
-                        nodeSuccess = false; scenarioSuccess = false; 
-                    } finally {
-                        flowResultsList.push(resultDetail);
+            const applyVariablesToText = (text, varsArr) => {
+                if (!text) return text; let result = String(text);
+                (varsArr || []).forEach(v => { 
+                    if (v.var_key && v.var_value !== undefined && v.var_value !== null) {
+                        result = result.replace(new RegExp(`\\{\\{${v.var_key}\\}\\}`, 'g'), v.var_value); 
                     }
-                    
-                    if (!nodeSuccess) break;
-                }
-            }
+                });
+                return result;
+            };
 
-            if (abortRef.current) return;
+            const nodesCopy = [...currentScenario.nodes]; nodesCopy.forEach(n => { n.runStatus = null; });
+            const edgesCopy = [...currentScenario.edges]; edgesCopy.forEach(e => { delete e.runtimeStatus; });
+            setCurrentScenario(prev => ({ ...prev, nodes: nodesCopy, edges: edgesCopy }));
 
-            if (nodeSuccess) {
-                updateNodeStatus(node.id, 'passed', 'Passed');
-                updateEdgeStatus(incomingEdges, 'success');
-                const children = adj[node.id].map(edge => currentScenario.nodes.find(n => n.id === edge.target)).filter(n => n && !visited.has(n.id));
-                if (children.length > 0) {
-                    updateEdgeStatus(adj[node.id].filter(e => !visited.has(e.target)), 'running');
-                    await Promise.all(children.map(child => executeNodeAsync(child)));
+            let inDegree = {}; let adj = {};
+            currentScenario.nodes.forEach(n => { inDegree[n.id] = 0; adj[n.id] = []; });
+            currentScenario.edges.forEach(e => { if (inDegree[e.target] !== undefined) inDegree[e.target]++; if (adj[e.source]) adj[e.source].push(e); });
+
+            let startNodes = currentScenario.nodes.filter(n => inDegree[n.id] === 0);
+            if (startNodes.length === 0 && currentScenario.nodes.length > 0) startNodes.push(currentScenario.nodes[0]);
+
+            let scenarioSuccess = true; let visited = new Set();
+            const flowResultsList = [];
+
+            const safeReqs = Array.isArray(requests) ? requests : [];
+            const safeMocks = Array.isArray(mocks) ? mocks : [];
+
+            const executeNodeAsync = async (node) => {
+                try {
+                    if (visited.has(node.id) || abortRef.current) return;
+                    visited.add(node.id);
+
+                    const delayMs = parseInt(node.delay) || 0;
+                    if (delayMs > 0) {
+                        updateNodeStatus(node.id, 'waiting', 'Waiting...', '');
+                        let remaining = delayMs;
+                        while (remaining > 0 && !abortRef.current) {
+                            updateNodeStatus(node.id, 'waiting', `Waiting (${Math.ceil(remaining/1000)}s)...`, '');
+                            const step = Math.min(1000, remaining);
+                            await new Promise(r => setTimeout(r, step));
+                            remaining -= step;
+                        }
+                    }
+
+                    if (abortRef.current) return;
+
+                    updateNodeStatus(node.id, 'running', 'Running...', '');
+                    const incomingEdges = currentScenario.edges.filter(e => e.target === node.id);
+                    updateEdgeStatus(incomingEdges, 'running');
+
+                    let nodeSuccess = true;
+                    appendLog(`Executing: ${node.name}`, 'info');
+
+                    let reqData = null;
+                    if (node.type === 'request') reqData = safeReqs.find(r => r.id === node.refId);
+                    else if (node.type === 'mock') reqData = safeMocks.find(m => m.id === node.refId);
+
+                    if (!reqData) {
+                        appendLog(`Skipped: Data missing`, 'error');
+                        nodeSuccess = false;
+                    } else {
+                        for (let iter = 1; iter <= node.iterations; iter++) {
+                            if (abortRef.current) break;
+                            updateNodeStatus(node.id, 'running', 'Running...', `${iter}/${node.iterations}`);
+                            
+                            let resultDetail = {
+                                nodeId: node.id, name: node.name, method: reqData.method, url: '',
+                                status: 0, time: 0, reqHeaders: '', reqBody: '', resHeaders: '', resBody: '', error: null
+                            };
+
+                            try {
+                                let responseStatus, responseTime = 0, responseBodyStr = '';
+                                if (node.type === 'request') {
+                                    let rawHeaders = typeof reqData.headers === 'string' ? JSON.parse(reqData.headers) : (reqData.headers || []);
+                                    if (!Array.isArray(rawHeaders)) rawHeaders = [];
+                                    let rawAuth = typeof reqData.authorization === 'string' ? JSON.parse(reqData.authorization) : (reqData.authorization || {});
+                                    
+                                    let context = { request: { url: reqData.url, method: reqData.method, headers: rawHeaders, body: reqData.body }, response: null, variables: runtimeVariables.reduce((acc, v) => ({ ...acc, [v.var_key]: v.var_value }), {}) };
+                                    context = await runScript(reqData.pre_request_script, context);
+                                    
+                                    let url = applyVariablesToText(context.request.url, runtimeVariables); 
+                                    let finalUrl = new URL(url); 
+                                    
+                                    let finalHeaders = context.request.headers.filter(h => h.key && h.key.trim() !== '').map(h => ({ key: applyVariablesToText(h.key, runtimeVariables), value: applyVariablesToText(h.value, runtimeVariables) }));
+
+                                    if (rawAuth) {
+                                        if (rawAuth.type === 'bearer' && rawAuth.token) { finalHeaders.push({ key: 'Authorization', value: `Bearer ${applyVariablesToText(rawAuth.token, runtimeVariables)}` }); } 
+                                        else if (rawAuth.type === 'basic' && rawAuth.username) { finalHeaders.push({ key: 'Authorization', value: `Basic ${btoa(`${applyVariablesToText(rawAuth.username, runtimeVariables)}:${applyVariablesToText(rawAuth.password, runtimeVariables)}`)}` }); } 
+                                        else if (rawAuth.type === 'apikey' && rawAuth.apikey) {
+                                            if (rawAuth.addto === 'header') finalHeaders.push({ key: applyVariablesToText(rawAuth.apikey, runtimeVariables), value: applyVariablesToText(rawAuth.apivalue, runtimeVariables) });
+                                            else finalUrl.searchParams.append(applyVariablesToText(rawAuth.apikey, runtimeVariables), applyVariablesToText(rawAuth.apivalue, runtimeVariables));
+                                        }
+                                    }
+
+                                    let bType = reqData.bodyType || reqData.body_type || 'none';
+                                    let rawBodyString = ['json', 'xml', 'text', 'html'].includes(bType) ? context.request.body : '';
+                                    let processedBody = applyVariablesToText(rawBodyString, runtimeVariables);
+                                    let formDataEntries = []; let urlencodedEntries = [];
+
+                                    if (bType === 'form-data') {
+                                        let fData = typeof reqData.body === 'string' ? JSON.parse(reqData.body) : (reqData.body || []);
+                                        if (Array.isArray(fData)) formDataEntries = fData.filter(f => f.key && f.key.trim() !== '').map(f => ({...f, key: applyVariablesToText(f.key, runtimeVariables), value: f.type === 'text' ? applyVariablesToText(f.value, runtimeVariables) : f.value}));
+                                    } else if (bType === 'urlencoded') {
+                                        let uData = typeof reqData.body === 'string' ? JSON.parse(reqData.body) : (reqData.body || []);
+                                        if (Array.isArray(uData)) urlencodedEntries = uData.filter(f => f.key && f.key.trim() !== '').map(f => ({...f, key: applyVariablesToText(f.key, runtimeVariables), value: applyVariablesToText(f.value, runtimeVariables)}));
+                                    }
+
+                                    const proxyData = { method: context.request.method, url: finalUrl.toString(), headersStr: JSON.stringify(finalHeaders), bodyType: bType, bodyContent: processedBody, formDataEntries, urlencodedEntries };
+                                    
+                                    resultDetail.url = finalUrl.toString();
+                                    resultDetail.reqHeaders = proxyData.headersStr;
+                                    resultDetail.reqBody = proxyData.bodyContent;
+
+                                    const response = await ApiService.proxyRequest(proxyData);
+                                    responseStatus = response.status; responseTime = response.time || 0;
+                                    responseBodyStr = typeof response.data === 'object' ? JSON.stringify(response.data) : (response.data || '');
+                                    context.response = response;
+
+                                    resultDetail.status = responseStatus;
+                                    resultDetail.time = responseTime;
+                                    resultDetail.resHeaders = JSON.stringify(response.headers);
+                                    resultDetail.resBody = responseBodyStr;
+
+                                    await runScript(reqData.post_request_script, context);
+                                    
+                                    for (const key in context.variables) {
+                                        const existingVar = runtimeVariables.find(v => v.var_key === key);
+                                        if (!existingVar || String(existingVar.var_value) !== String(context.variables[key])) {
+                                            try {
+                                                await ApiService.saveVariable(activeWorkspaceId, key, context.variables[key]);
+                                                let vIdx = runtimeVariables.findIndex(v => v.var_key === key);
+                                                if(vIdx > -1) runtimeVariables[vIdx].var_value = context.variables[key];
+                                                else runtimeVariables.push({id: null, var_key: key, var_value: context.variables[key]});
+                                            } catch(e) {}
+                                        }
+                                    }
+
+                                    let assertions = [];
+                                    try { assertions = typeof reqData.assertions === 'string' ? JSON.parse(reqData.assertions) : (reqData.assertions || []); } catch(e) {}
+                                    if (assertions && assertions.length > 0) {
+                                        const hasFailures = assertions.some(a => {
+                                            if (!a.value || a.value.trim() === '') return false;
+                                            let passed = false;
+                                            try {
+                                                let targetValue = '';
+                                                if (a.type === 'status') targetValue = responseStatus.toString();
+                                                else if (a.type === 'time') targetValue = parseInt(responseTime);
+                                                else if (a.type === 'body' || a.type === 'body_contains') targetValue = responseBodyStr;
+                                                else if (a.type === 'header') targetValue = JSON.stringify(response.headers || {});
+                                                
+                                                if (a.type === 'time') {
+                                                    const expectVal = parseInt(a.value);
+                                                    if (a.operator === 'equals') passed = targetValue === expectVal;
+                                                    else if (a.operator === 'not_equals') passed = targetValue !== expectVal;
+                                                    else if (a.operator === 'less_than') passed = targetValue < expectVal;
+                                                    else if (a.operator === 'greater_than') passed = targetValue > expectVal;
+                                                } else {
+                                                    const expectValStr = a.value.toString();
+                                                    if (a.operator === 'equals') passed = targetValue === expectValStr;
+                                                    else if (a.operator === 'not_equals') passed = targetValue !== expectValStr;
+                                                    else if (a.operator === 'contains') passed = targetValue.includes(expectValStr);
+                                                    else if (a.operator === 'not_contains') passed = !targetValue.includes(expectValStr);
+                                                    else if (a.operator === 'less_than') passed = parseInt(targetValue) < parseInt(expectValStr);
+                                                    else if (a.operator === 'greater_than') passed = parseInt(targetValue) > parseInt(expectValStr);
+                                                }
+                                            } catch(e) { passed = false; }
+                                            
+                                            return !passed; 
+                                        });
+                                        if (hasFailures) throw new Error(`Assertion failed on iter ${iter}`);
+                                    }
+                                } else {
+                                    const url = `${window.location.origin}/api/mock/${activeWorkspaceId}${reqData.path.startsWith('/') ? reqData.path : '/' + reqData.path}`;
+                                    resultDetail.url = url;
+                                    const reqStart = Date.now();
+                                    const response = await fetch(url, { method: reqData.method });
+                                    responseStatus = response.status;
+                                    
+                                    resultDetail.status = responseStatus;
+                                    resultDetail.time = Date.now() - reqStart;
+                                    resultDetail.resHeaders = JSON.stringify(Object.fromEntries(response.headers.entries()));
+                                    resultDetail.resBody = await response.text();
+
+                                    if (responseStatus !== parseInt(reqData.status)) throw new Error(`Expected ${reqData.status}, got ${responseStatus}`);
+                                }
+
+                                appendLog(`  Iter ${iter}: HTTP ${responseStatus}`, responseStatus >= 200 && responseStatus < 300 ? 'success' : 'warning');
+                                if (iter < node.iterations) await new Promise(r => setTimeout(r, 200));
+
+                            } catch (e) {
+                                appendLog(`  Iter ${iter} Error: ${e.message}`, 'error');
+                                resultDetail.error = e.message;
+                                nodeSuccess = false; scenarioSuccess = false; 
+                            } finally {
+                                flowResultsList.push(resultDetail);
+                            }
+                            
+                            if (!nodeSuccess) break;
+                        }
+                    }
+
+                    if (abortRef.current) return;
+
+                    if (nodeSuccess) {
+                        updateNodeStatus(node.id, 'passed', 'Passed');
+                        updateEdgeStatus(incomingEdges, 'success');
+                        const children = adj[node.id].map(edge => currentScenario.nodes.find(n => n.id === edge.target)).filter(n => n && !visited.has(n.id));
+                        if (children.length > 0) {
+                            updateEdgeStatus(adj[node.id].filter(e => !visited.has(e.target)), 'running');
+                            await Promise.all(children.map(child => executeNodeAsync(child)));
+                        }
+                    } else {
+                        updateNodeStatus(node.id, 'failed', 'Failed');
+                        updateEdgeStatus(incomingEdges, 'error'); updateEdgeStatus(adj[node.id], 'error');
+                    }
+                } catch (err) {
+                    appendLog(`Critical Error on node ${node.name}: ${err.message}`, 'error');
+                    updateNodeStatus(node.id, 'failed', 'Crashed');
                 }
+            };
+
+            await Promise.all(startNodes.map(node => executeNodeAsync(node)));
+
+            if (abortRef.current) {
+                appendLog(`Test stopped manually.`, 'warning');
             } else {
-                updateNodeStatus(node.id, 'failed', 'Failed');
-                updateEdgeStatus(incomingEdges, 'error'); updateEdgeStatus(adj[node.id], 'error');
+                setCurrentScenario(prev => {
+                    const newE = [...prev.edges]; newE.forEach(e => { if (e.runtimeStatus === 'running') e.runtimeStatus = 'error'; });
+                    return { ...prev, edges: newE };
+                });
+                setVariablesList(runtimeVariables);
+                appendLog(scenarioSuccess ? `Scenario completed successfully!` : `Scenario execution finished with failures.`, scenarioSuccess ? 'success' : 'error');
+                setApiFlowReport(flowResultsList); 
             }
-        };
 
-        await Promise.all(startNodes.map(node => executeNodeAsync(node)));
-
-        if (abortRef.current) {
-            appendLog(`Test stopped manually.`, 'warning');
-        } else {
-            setCurrentScenario(prev => {
-                const newE = [...prev.edges]; newE.forEach(e => { if (e.runtimeStatus === 'running') e.runtimeStatus = 'error'; });
-                return { ...prev, edges: newE };
-            });
-            setVariablesList(runtimeVariables);
-            appendLog(scenarioSuccess ? `Scenario completed successfully!` : `Scenario execution finished with failures.`, scenarioSuccess ? 'success' : 'error');
-            setApiFlowReport(flowResultsList); // Show the report automatically
+        } catch (err) {
+            console.error("Critical Execution Flow Error:", err);
+            appendLog(`Test crashed entirely: ${err.message}`, 'error');
+        } finally {
+            setIsRunning(false);
         }
-        setIsRunning(false);
     };
 
-    // =====================================
-    // RUNNER: PERFORMANCE LOAD TEST
-    // =====================================
     const runPerformanceTest = async () => {
         const { vus, spawnRate, duration } = currentScenario.perfConfig;
         if (!vus || !spawnRate || !duration) {
@@ -721,188 +767,200 @@ export default function Scenarios({ activeWorkspaceId }) {
         perfLogsRef.current = [];
         perfNodesRef.current = {};
 
-        setLogs([]); setLogsOpen(true);
-        appendLog(`Starting Performance Test: ${currentScenario.name} [VUs: ${vus}, Rate: ${spawnRate}/s, Duration: ${duration}s]`, 'info');
+        try {
+            setLogs([]); setLogsOpen(true);
+            appendLog(`Starting Performance Test: ${currentScenario.name} [VUs: ${vus}, Rate: ${spawnRate}/s, Duration: ${duration}s]`, 'info');
 
-        const durationMs = duration * 1000;
-        const startTime = Date.now();
-        
-        const stats = { global: { total: 0, success: 0, fail: 0, times: [] }, nodes: {} };
-        
-        currentScenario.nodes.forEach(n => { 
-            stats.nodes[n.id] = { name: n.name, method: n.method, total: 0, success: 0, fail: 0, times: [], details: [] }; 
-            perfNodesRef.current[n.id] = { status: 'running', text: 'Load Testing', prog: '0 Req' };
-        });
+            const durationMs = duration * 1000;
+            const startTime = Date.now();
+            
+            const stats = { global: { total: 0, success: 0, fail: 0, times: [] }, nodes: {} };
+            
+            currentScenario.nodes.forEach(n => { 
+                stats.nodes[n.id] = { name: n.name, method: n.method, total: 0, success: 0, fail: 0, times: [], details: [] }; 
+                perfNodesRef.current[n.id] = { status: 'running', text: 'Load Testing', prog: '0 Req' };
+            });
 
-        // Set all edges to animated 'running'
-        setCurrentScenario(prev => ({
-            ...prev,
-            edges: prev.edges.map(e => ({ ...e, runtimeStatus: 'running' })),
-            nodes: prev.nodes.map(n => ({ ...n, runStatus: perfNodesRef.current[n.id] }))
-        }));
+            setCurrentScenario(prev => ({
+                ...prev,
+                edges: prev.edges.map(e => ({ ...e, runtimeStatus: 'running' })),
+                nodes: prev.nodes.map(n => ({ ...n, runStatus: perfNodesRef.current[n.id] }))
+            }));
 
-        let inDegree = {}; let adj = {};
-        currentScenario.nodes.forEach(n => { inDegree[n.id] = 0; adj[n.id] = []; });
-        currentScenario.edges.forEach(e => { if (inDegree[e.target] !== undefined) inDegree[e.target]++; if (adj[e.source]) adj[e.source].push(e); });
-        let startNodes = currentScenario.nodes.filter(n => inDegree[n.id] === 0);
-        if (startNodes.length === 0 && currentScenario.nodes.length > 0) startNodes.push(currentScenario.nodes[0]);
+            let inDegree = {}; let adj = {};
+            currentScenario.nodes.forEach(n => { inDegree[n.id] = 0; adj[n.id] = []; });
+            currentScenario.edges.forEach(e => { if (inDegree[e.target] !== undefined) inDegree[e.target]++; if (adj[e.source]) adj[e.source].push(e); });
+            let startNodes = currentScenario.nodes.filter(n => inDegree[n.id] === 0);
+            if (startNodes.length === 0 && currentScenario.nodes.length > 0) startNodes.push(currentScenario.nodes[0]);
 
-        // Sync interval to update UI without freezing
-        const syncInterval = setInterval(() => {
-            if (abortRef.current || Date.now() - startTime >= durationMs) {
-                clearInterval(syncInterval);
-                return;
-            }
-            if (perfLogsRef.current.length > 0) {
-                setLogs(prev => {
-                    const newLogs = [...prev, ...perfLogsRef.current];
-                    perfLogsRef.current = [];
-                    return newLogs.length > 150 ? newLogs.slice(-150) : newLogs; // limit buffer
+            const syncInterval = setInterval(() => {
+                if (abortRef.current || Date.now() - startTime >= durationMs) {
+                    clearInterval(syncInterval);
+                    return;
+                }
+                if (perfLogsRef.current.length > 0) {
+                    setLogs(prev => {
+                        const newLogs = [...prev, ...perfLogsRef.current];
+                        perfLogsRef.current = [];
+                        return newLogs.length > 150 ? newLogs.slice(-150) : newLogs;
+                    });
+                }
+                setCurrentScenario(prev => {
+                    const newNodes = prev.nodes.map(n => perfNodesRef.current[n.id] ? { ...n, runStatus: perfNodesRef.current[n.id] } : n);
+                    return { ...prev, nodes: newNodes };
+                });
+            }, 500);
+
+            let mergedVars = [...(variablesList || [])];
+            if (activeEnvId && envVariablesMap[activeEnvId]) {
+                envVariablesMap[activeEnvId].forEach(ev => {
+                    const idx = mergedVars.findIndex(g => g.var_key === ev.var_key);
+                    if (idx > -1) mergedVars[idx] = ev;
+                    else mergedVars.push(ev);
                 });
             }
-            setCurrentScenario(prev => {
-                const newNodes = prev.nodes.map(n => perfNodesRef.current[n.id] ? { ...n, runStatus: perfNodesRef.current[n.id] } : n);
-                return { ...prev, nodes: newNodes };
-            });
-        }, 500);
 
-        const runVU = async (vuId) => {
-            let vuVariables = JSON.parse(JSON.stringify(variablesList)); 
-            const applyVars = (text) => {
-                if (!text) return text; let result = String(text);
-                vuVariables.forEach(v => { if (v.var_key && v.var_value) result = result.replace(new RegExp(`\\{\\{${v.var_key}\\}\\}`, 'g'), v.var_value); });
-                return result;
-            };
+            const safeReqs = Array.isArray(requests) ? requests : [];
+            const safeMocks = Array.isArray(mocks) ? mocks : [];
 
-            while (Date.now() - startTime < durationMs && !abortRef.current) {
-                const traverse = async (nodeId) => {
-                    if (abortRef.current || Date.now() - startTime >= durationMs) return;
-                    const node = currentScenario.nodes.find(n => n.id === nodeId);
-                    if (!node) return;
-
-                    let reqData = node.type === 'request' ? requests.find(r => r.id === node.refId) : mocks.find(m => m.id === node.refId);
-                    if (reqData) {
-                        const reqStart = Date.now();
-                        let resultDetail = { vu: vuId, status: 0, time: 0, reqHeaders: '', reqBody: '', resHeaders: '', resBody: '', error: null };
-                        
-                        try {
-                            let isSuccess = false;
-                            if (node.type === 'request') {
-                                let url = applyVars(reqData.url); let finalUrl = new URL(url);
-                                let bType = reqData.bodyType || reqData.body_type || 'none';
-                                let rawBodyString = ['json', 'xml', 'text', 'html'].includes(bType) ? reqData.body : '';
-                                let processedBody = applyVars(rawBodyString);
-                                const proxyData = { method: reqData.method, url: finalUrl.toString(), headersStr: '[]', bodyType: bType, bodyContent: processedBody, formDataEntries: [], urlencodedEntries: [] };
-                                
-                                resultDetail.reqHeaders = proxyData.headersStr;
-                                resultDetail.reqBody = proxyData.bodyContent;
-                                resultDetail.url = finalUrl.toString();
-
-                                const response = await ApiService.proxyRequest(proxyData);
-                                resultDetail.time = response.time || (Date.now() - reqStart);
-                                resultDetail.status = response.status;
-                                resultDetail.resHeaders = JSON.stringify(response.headers);
-                                resultDetail.resBody = typeof response.data === 'object' ? JSON.stringify(response.data) : response.data;
-                                
-                                isSuccess = response.status >= 200 && response.status < 300;
-                            } else {
-                                const url = `${window.location.origin}/api/mock/${activeWorkspaceId}${reqData.path.startsWith('/') ? reqData.path : '/' + reqData.path}`;
-                                resultDetail.url = url;
-                                const response = await fetch(url, { method: reqData.method });
-                                resultDetail.time = Date.now() - reqStart;
-                                resultDetail.status = response.status;
-                                resultDetail.resHeaders = JSON.stringify(Object.fromEntries(response.headers.entries()));
-                                resultDetail.resBody = await response.text();
-                                
-                                isSuccess = response.status === parseInt(reqData.status);
-                            }
-
-                            stats.global.total++;
-                            stats.nodes[nodeId].total++;
-                            stats.global.times.push(resultDetail.time);
-                            stats.nodes[nodeId].times.push(resultDetail.time);
-                            
-                            if(isSuccess) { stats.global.success++; stats.nodes[nodeId].success++; } 
-                            else { stats.global.fail++; stats.nodes[nodeId].fail++; }
-
-                            stats.nodes[nodeId].details.push(resultDetail);
-                            
-                            perfNodesRef.current[nodeId] = { status: 'running', text: 'Load Testing', prog: `Avg: ${Math.round(stats.nodes[nodeId].times.reduce((a,b)=>a+b,0)/stats.nodes[nodeId].times.length)}ms` };
-                            perfLogsRef.current.push({ msg: `[VU-${vuId}] ${node.name} - HTTP ${resultDetail.status} (${resultDetail.time}ms)`, type: isSuccess ? 'success' : 'error', time: new Date().toLocaleTimeString() });
-
-                        } catch(e) {
-                            resultDetail.time = Date.now() - reqStart;
-                            resultDetail.error = e.message;
-                            stats.global.total++; stats.global.fail++;
-                            stats.nodes[nodeId].total++; stats.nodes[nodeId].fail++;
-                            stats.nodes[nodeId].details.push(resultDetail);
-                            
-                            perfLogsRef.current.push({ msg: `[VU-${vuId}] ${node.name} - ERR: ${e.message}`, type: 'error', time: new Date().toLocaleTimeString() });
-                        }
-                    }
-
-                    for (const edge of adj[nodeId]) await traverse(edge.target);
+            const runVU = async (vuId) => {
+                let vuVariables = JSON.parse(JSON.stringify(mergedVars)); 
+                const applyVars = (text) => {
+                    if (!text) return text; let result = String(text);
+                    vuVariables.forEach(v => { if (v.var_key && v.var_value !== undefined && v.var_value !== null) result = result.replace(new RegExp(`\\{\\{${v.var_key}\\}\\}`, 'g'), v.var_value); });
+                    return result;
                 };
 
-                for (const startNode of startNodes) await traverse(startNode.id);
-            }
-        };
+                while (Date.now() - startTime < durationMs && !abortRef.current) {
+                    const traverse = async (nodeId) => {
+                        if (abortRef.current || Date.now() - startTime >= durationMs) return;
+                        const node = currentScenario.nodes.find(n => n.id === nodeId);
+                        if (!node) return;
 
-        let activeVUs = 0;
-        const spawnInterval = setInterval(() => {
-            if (abortRef.current || Date.now() - startTime >= durationMs) {
-                clearInterval(spawnInterval);
-                return;
-            }
-            for (let i = 0; i < spawnRate && activeVUs < vus; i++) {
-                activeVUs++;
-                runVU(activeVUs);
-            }
-            if (activeVUs >= vus) clearInterval(spawnInterval);
-        }, 1000);
+                        let reqData = node.type === 'request' ? safeReqs.find(r => r.id === node.refId) : safeMocks.find(m => m.id === node.refId);
+                        if (reqData) {
+                            const reqStart = Date.now();
+                            let resultDetail = { vu: vuId, status: 0, time: 0, reqHeaders: '', reqBody: '', resHeaders: '', resBody: '', error: null };
+                            
+                            try {
+                                let isSuccess = false;
+                                if (node.type === 'request') {
+                                    let url = applyVars(reqData.url); let finalUrl = new URL(url);
+                                    let bType = reqData.bodyType || reqData.body_type || 'none';
+                                    let rawBodyString = ['json', 'xml', 'text', 'html'].includes(bType) ? reqData.body : '';
+                                    let processedBody = applyVars(rawBodyString);
+                                    const proxyData = { method: reqData.method, url: finalUrl.toString(), headersStr: '[]', bodyType: bType, bodyContent: processedBody, formDataEntries: [], urlencodedEntries: [] };
+                                    
+                                    resultDetail.reqHeaders = proxyData.headersStr;
+                                    resultDetail.reqBody = proxyData.bodyContent;
+                                    resultDetail.url = finalUrl.toString();
 
-        await new Promise(resolve => {
-            const check = setInterval(() => {
-                if (abortRef.current || Date.now() - startTime >= durationMs) {
-                    clearInterval(check);
-                    resolve();
+                                    const response = await ApiService.proxyRequest(proxyData);
+                                    resultDetail.time = response.time || (Date.now() - reqStart);
+                                    resultDetail.status = response.status;
+                                    resultDetail.resHeaders = JSON.stringify(response.headers);
+                                    resultDetail.resBody = typeof response.data === 'object' ? JSON.stringify(response.data) : response.data;
+                                    
+                                    isSuccess = response.status >= 200 && response.status < 300;
+                                } else {
+                                    const url = `${window.location.origin}/api/mock/${activeWorkspaceId}${reqData.path.startsWith('/') ? reqData.path : '/' + reqData.path}`;
+                                    resultDetail.url = url;
+                                    const response = await fetch(url, { method: reqData.method });
+                                    resultDetail.time = Date.now() - reqStart;
+                                    resultDetail.status = response.status;
+                                    resultDetail.resHeaders = JSON.stringify(Object.fromEntries(response.headers.entries()));
+                                    resultDetail.resBody = await response.text();
+                                    
+                                    isSuccess = response.status === parseInt(reqData.status);
+                                }
+
+                                stats.global.total++;
+                                stats.nodes[nodeId].total++;
+                                stats.global.times.push(resultDetail.time);
+                                stats.nodes[nodeId].times.push(resultDetail.time);
+                                
+                                if(isSuccess) { stats.global.success++; stats.nodes[nodeId].success++; } 
+                                else { stats.global.fail++; stats.nodes[nodeId].fail++; }
+
+                                stats.nodes[nodeId].details.push(resultDetail);
+                                
+                                perfNodesRef.current[nodeId] = { status: 'running', text: 'Load Testing', prog: `Avg: ${Math.round(stats.nodes[nodeId].times.reduce((a,b)=>a+b,0)/stats.nodes[nodeId].times.length)}ms` };
+                                perfLogsRef.current.push({ msg: `[VU-${vuId}] ${node.name} - HTTP ${resultDetail.status} (${resultDetail.time}ms)`, type: isSuccess ? 'success' : 'error', time: new Date().toLocaleTimeString() });
+
+                            } catch(e) {
+                                resultDetail.time = Date.now() - reqStart;
+                                resultDetail.error = e.message;
+                                stats.global.total++; stats.global.fail++;
+                                stats.nodes[nodeId].total++; stats.nodes[nodeId].fail++;
+                                stats.nodes[nodeId].details.push(resultDetail);
+                                
+                                perfLogsRef.current.push({ msg: `[VU-${vuId}] ${node.name} - ERR: ${e.message}`, type: 'error', time: new Date().toLocaleTimeString() });
+                            }
+                        }
+
+                        for (const edge of adj[nodeId]) await traverse(edge.target);
+                    };
+
+                    for (const startNode of startNodes) await traverse(startNode.id);
                 }
-            }, 500);
-        });
-
-        clearInterval(syncInterval);
-
-        setCurrentScenario(prev => ({
-            ...prev,
-            edges: prev.edges.map(e => ({ ...e, runtimeStatus: abortRef.current ? 'error' : 'success' })),
-            nodes: prev.nodes.map(n => ({ ...n, runStatus: { status: abortRef.current ? 'waiting' : 'passed', text: abortRef.current ? 'Stopped' : 'Finished', prog: `Reqs: ${stats.nodes[n.id].total}` } }))
-        }));
-
-        setIsRunning(false);
-        
-        if (abortRef.current) {
-            appendLog(`Performance test stopped manually.`, 'warning');
-        } else {
-            appendLog(`Performance test finished successfully.`, 'success');
-        }
-
-        // Calculate Report Metrics
-        const calcMetrics = (arr) => {
-            if (arr.length === 0) return { min: 0, max: 0, avg: 0, p95: 0 };
-            arr.sort((a,b)=>a-b);
-            return {
-                min: arr[0], max: arr[arr.length - 1],
-                avg: Math.round(arr.reduce((a,b)=>a+b,0) / arr.length),
-                p95: arr[Math.floor(arr.length * 0.95)]
             };
-        };
 
-        stats.global.metrics = calcMetrics(stats.global.times);
-        Object.keys(stats.nodes).forEach(k => {
-            stats.nodes[k].metrics = calcMetrics(stats.nodes[k].times);
-        });
+            let activeVUs = 0;
+            const spawnInterval = setInterval(() => {
+                if (abortRef.current || Date.now() - startTime >= durationMs) {
+                    clearInterval(spawnInterval);
+                    return;
+                }
+                for (let i = 0; i < spawnRate && activeVUs < vus; i++) {
+                    activeVUs++;
+                    runVU(activeVUs);
+                }
+                if (activeVUs >= vus) clearInterval(spawnInterval);
+            }, 1000);
 
-        setPerfReport(stats);
+            await new Promise(resolve => {
+                const check = setInterval(() => {
+                    if (abortRef.current || Date.now() - startTime >= durationMs) {
+                        clearInterval(check);
+                        resolve();
+                    }
+                }, 500);
+            });
+
+            clearInterval(syncInterval);
+
+            setCurrentScenario(prev => ({
+                ...prev,
+                edges: prev.edges.map(e => ({ ...e, runtimeStatus: abortRef.current ? 'error' : 'success' })),
+                nodes: prev.nodes.map(n => ({ ...n, runStatus: { status: abortRef.current ? 'waiting' : 'passed', text: abortRef.current ? 'Stopped' : 'Finished', prog: `Reqs: ${stats.nodes[n.id].total}` } }))
+            }));
+
+            if (abortRef.current) appendLog(`Performance test stopped manually.`, 'warning');
+            else appendLog(`Performance test finished successfully.`, 'success');
+
+            const calcMetrics = (arr) => {
+                if (arr.length === 0) return { min: 0, max: 0, avg: 0, p95: 0 };
+                arr.sort((a,b)=>a-b);
+                return {
+                    min: arr[0], max: arr[arr.length - 1],
+                    avg: Math.round(arr.reduce((a,b)=>a+b,0) / arr.length),
+                    p95: arr[Math.floor(arr.length * 0.95)]
+                };
+            };
+
+            stats.global.metrics = calcMetrics(stats.global.times);
+            Object.keys(stats.nodes).forEach(k => {
+                stats.nodes[k].metrics = calcMetrics(stats.nodes[k].times);
+            });
+
+            setPerfReport(stats);
+
+        } catch (err) {
+            console.error("Critical Load Test Error:", err);
+            showAlert("Performance Test crashed: " + err.message, "error");
+        } finally {
+            setIsRunning(false);
+        }
     };
 
     const handleStopTest = () => {
@@ -955,10 +1013,8 @@ export default function Scenarios({ activeWorkspaceId }) {
                 }
             `}} />
             
-            {/* SIDEBAR KIRI UTAMA (Unified: Judul, Scenarios, Library) */}
             <aside className={`bg-gray-50 dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700 flex flex-col shrink-0 z-30 absolute md:relative h-full transition-all duration-300 shadow-2xl md:shadow-none ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} ${isLeftPanelExpanded ? 'w-[320px]' : 'w-0 md:w-14'}`}>
                 
-                {/* Tombol Collapse/Expand Mengambang di Tepi Kanan Sidebar */}
                 <button 
                     onClick={() => setIsLeftPanelExpanded(!isLeftPanelExpanded)} 
                     className="hidden md:flex absolute -right-3.5 top-6 z-50 w-7 h-7 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-full items-center justify-center shadow-md cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors text-gray-500 dark:text-gray-400"
@@ -967,11 +1023,9 @@ export default function Scenarios({ activeWorkspaceId }) {
                     <i className={`fa-solid fa-chevron-${isLeftPanelExpanded ? 'left' : 'right'} text-[10px]`}></i>
                 </button>
 
-                {/* Konten Sidebar ketika Expanded */}
                 {isLeftPanelExpanded && (
                     <div className="flex flex-col h-full w-[320px] overflow-hidden opacity-100 transition-opacity duration-300">
                         
-                        {/* 1. Header: Judul Scenario & Badge (Sesuai Permintaan) */}
                         <div className="p-4 border-b border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 shrink-0">
                             <div className="text-[10px] font-extrabold text-gray-400 uppercase tracking-wider mb-1">Current Scenario</div>
                             <input 
@@ -988,10 +1042,8 @@ export default function Scenarios({ activeWorkspaceId }) {
                             </div>
                         </div>
 
-                        {/* Container Accordions untuk Scenarios dan Library (Membagi sisa ruang vertikal) */}
                         <div className="flex flex-col flex-1 overflow-hidden bg-gray-50 dark:bg-slate-900/50">
                             
-                            {/* Accordion 1: Test Scenarios */}
                             <div className={`flex flex-col border-b border-gray-200 dark:border-slate-700 ${showScenariosAccordion ? 'flex-1' : 'shrink-0'} overflow-hidden transition-all duration-300`}>
                                 <div 
                                     onClick={() => setShowScenariosAccordion(!showScenariosAccordion)} 
@@ -1022,7 +1074,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                                 )}
                             </div>
 
-                            {/* Accordion 2: Library */}
                             <div className={`flex flex-col ${showLibraryAccordion ? 'flex-1' : 'shrink-0'} overflow-hidden transition-all duration-300`}>
                                 <div 
                                     onClick={() => setShowLibraryAccordion(!showLibraryAccordion)} 
@@ -1089,7 +1140,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                     </div>
                 )}
 
-                {/* Konten Sidebar ketika Collapsed (Hanya Icon Cepat) */}
                 {!isLeftPanelExpanded && (
                     <div className="hidden md:flex flex-col items-center pt-6 space-y-6 w-14 opacity-100 transition-opacity duration-300">
                         <div title="Saved Scenarios" className="cursor-pointer p-2 rounded-lg text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors" onClick={() => {setIsLeftPanelExpanded(true); setShowScenariosAccordion(true); setShowLibraryAccordion(false);}}>
@@ -1104,24 +1154,35 @@ export default function Scenarios({ activeWorkspaceId }) {
 
             {sidebarOpen && <div className="fixed inset-0 bg-black/50 z-20 md:hidden" onClick={() => setSidebarOpen(false)}></div>}
 
-            {/* AREA UTAMA (KANVAS & TOMBOL) */}
             <main className="flex-grow flex flex-col bg-white dark:bg-slate-900 min-w-0 h-full overflow-hidden relative">
                 
-                {/* Header Atas Kanvas (Hanya Action Buttons & Hamburger Mobile) */}
                 <div className="h-14 md:h-16 px-4 border-b border-gray-200 dark:border-slate-700 flex items-center justify-between bg-white dark:bg-slate-800 shrink-0 z-20 shadow-sm">
                     <div className="flex items-center gap-3">
-                        {/* Hamburger untuk Mobile */}
                         <button onClick={() => setSidebarOpen(true)} className="md:hidden p-1.5 text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-700 rounded transition-colors"><i className="fa-solid fa-bars"></i></button>
                         
-                        {/* Judul Muncul di Header Kanvas JIKA Sidebar Ditutup (Agar pengguna tetap tahu sedang buka skenario apa) */}
                         <div className={`transition-opacity duration-300 ${!isLeftPanelExpanded ? 'opacity-100 flex items-center gap-3' : 'opacity-0 hidden md:flex pointer-events-none'}`}>
                             <span className="font-bold text-gray-800 dark:text-gray-200 text-lg hidden md:block">{currentScenario.name}</span>
                             <span className="text-[10px] bg-gray-100 dark:bg-slate-700 px-2 py-0.5 rounded-full text-gray-600 dark:text-gray-300 font-bold hidden md:block">{currentScenario.testType === 'performance' ? 'Performance' : 'API Flow'}</span>
                         </div>
                     </div>
                     
-                    {/* Action Buttons (Save, Run, Delete) */}
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 items-center">
+                        
+                        <div className="flex items-center gap-1 border-r border-gray-300 dark:border-slate-600 pr-3 mr-1">
+                            <i className="fa-solid fa-globe text-gray-400 text-xs hidden md:block"></i>
+                            <select 
+                                value={activeEnvId} 
+                                onChange={e => {
+                                    setActiveEnvId(e.target.value);
+                                    localStorage.setItem(`rf_env_${activeWorkspaceId}`, e.target.value);
+                                }} 
+                                className="bg-transparent text-sm font-bold text-gray-700 dark:text-gray-300 outline-none w-28 md:w-32 truncate"
+                            >
+                                <option value="">No Environment</option>
+                                {environments.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                            </select>
+                        </div>
+
                         <button onClick={handleSave} disabled={isRunning} className="px-4 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50">
                             <i className="fa-solid fa-save"></i> <span className="hidden sm:inline">Save</span>
                         </button>
@@ -1144,7 +1205,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                     </div>
                 </div>
 
-                {/* Sub-Header: Konfigurasi Performance Test (Jika tipe Performance) */}
                 {currentScenario.testType === 'performance' && (
                     <div className="px-4 py-2.5 bg-purple-50/80 dark:bg-purple-900/20 border-b border-gray-200 dark:border-slate-700 shrink-0 flex gap-6 items-center overflow-x-auto scroll-custom z-10 shadow-inner">
                         <div className="flex items-center gap-2">
@@ -1162,7 +1222,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                     </div>
                 )}
 
-                {/* KANVAS NODE VISUAL */}
                 <div className="flex-grow relative bg-[#f8fafc] dark:bg-[#0f172a] overflow-hidden bg-dot-pattern">
                     <style dangerouslySetInnerHTML={{__html: `
                         .bg-dot-pattern {
@@ -1279,7 +1338,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                 </div>
             </main>
 
-            {/* Modal Report untuk API Flow Test */}
             {apiFlowReport && (
                 <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-4xl flex flex-col max-h-[90vh] overflow-hidden transform transition-all border border-gray-200 dark:border-slate-700">
@@ -1309,7 +1367,6 @@ export default function Scenarios({ activeWorkspaceId }) {
 
                                         {expandedFlowItem === idx && (
                                             <div className="border-t border-gray-200 dark:border-slate-700 p-4 grid grid-cols-1 md:grid-cols-2 gap-4 bg-gray-50/50 dark:bg-slate-900/50 text-xs">
-                                                {/* Request Panel */}
                                                 <div className="space-y-2">
                                                     <h5 className="font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider border-b border-gray-200 dark:border-slate-700 pb-1">Request</h5>
                                                     <div className="font-mono bg-white dark:bg-slate-800 p-2 rounded border border-gray-200 dark:border-slate-700 break-all">{item.url}</div>
@@ -1321,7 +1378,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                                                     <pre className="bg-gray-100 dark:bg-slate-950 p-2 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto scroll-custom text-[10px] max-h-40">{item.reqBody || 'No Body'}</pre>
                                                 </div>
 
-                                                {/* Response Panel */}
                                                 <div className="space-y-2">
                                                     <h5 className="font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider border-b border-gray-200 dark:border-slate-700 pb-1">Response</h5>
                                                     {item.error ? (
@@ -1351,7 +1407,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                 </div>
             )}
 
-            {/* Performance Report Modal - Detail Per API & Executions */}
             {perfReport && (
                 <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-5xl flex flex-col max-h-[90vh] overflow-hidden transform transition-all border border-gray-200 dark:border-slate-700">
@@ -1361,7 +1416,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                         </div>
                         
                         <div className="p-6 overflow-y-auto flex-1 min-h-0 scroll-custom bg-gray-50 dark:bg-slate-900">
-                            {/* Global Stats */}
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                                 <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-gray-200 dark:border-slate-700 text-center shadow-sm">
                                     <p className="text-xs text-gray-500 dark:text-gray-400 font-bold uppercase mb-1">Total Req</p>
@@ -1418,7 +1472,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                                                     <td className="px-4 py-3 text-right font-mono">{n.metrics.p95}ms</td>
                                                 </tr>
                                                 
-                                                {/* Expanded Output Results for the Node */}
                                                 {expandedPerfNode === nodeId && (
                                                     <tr>
                                                         <td colSpan="9" className="p-0 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50">
@@ -1443,22 +1496,16 @@ export default function Scenarios({ activeWorkspaceId }) {
                                                                                 <div className="text-xs font-mono text-gray-500">{det.time} ms</div>
                                                                             </div>
 
-                                                                            {/* Expanded Detailed Request/Response Payload */}
                                                                             {expandedPerfDetail === idx && (
                                                                                 <div className="border-t border-gray-100 dark:border-slate-700 p-4 grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs bg-gray-50/30 dark:bg-slate-900/30">
-                                                                                    {/* Request Pane */}
                                                                                     <div>
                                                                                         <h6 className="font-bold text-gray-500 uppercase tracking-wider border-b border-gray-200 dark:border-slate-700 pb-1 mb-2">Request</h6>
                                                                                         <div className="font-mono bg-white dark:bg-slate-950 p-1.5 rounded border border-gray-200 dark:border-slate-700 break-all mb-2">{det.url}</div>
-                                                                                        
                                                                                         <div className="font-bold text-gray-500 mt-2">Headers:</div>
                                                                                         <pre className="bg-white dark:bg-slate-950 p-2 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto scroll-custom max-h-32 mt-1">{formatPayload(det.reqHeaders)}</pre>
-                                                                                        
                                                                                         <div className="font-bold text-gray-500 mt-2">Body:</div>
                                                                                         <pre className="bg-white dark:bg-slate-950 p-2 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto scroll-custom max-h-40 mt-1">{formatPayload(det.reqBody) || 'No Body'}</pre>
                                                                                     </div>
-
-                                                                                    {/* Response Pane */}
                                                                                     <div>
                                                                                         <h6 className="font-bold text-gray-500 uppercase tracking-wider border-b border-gray-200 dark:border-slate-700 pb-1 mb-2">Response</h6>
                                                                                         {det.error ? (
@@ -1467,7 +1514,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                                                                                             <>
                                                                                             <div className="font-bold text-gray-500 mt-2">Headers:</div>
                                                                                             <pre className="bg-white dark:bg-slate-950 p-2 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto scroll-custom max-h-32 mt-1">{formatPayload(det.resHeaders)}</pre>
-                                                                                            
                                                                                             <div className="font-bold text-gray-500 mt-2">Body:</div>
                                                                                             <pre className="bg-white dark:bg-slate-950 p-2 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto scroll-custom max-h-40 mt-1">{formatPayload(det.resBody)}</pre>
                                                                                             </>
@@ -1497,7 +1543,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                 </div>
             )}
 
-            {/* Modal Select Scenario Type */}
             {showNewModal && (
                 <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
                     <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-sm overflow-hidden transform transition-all border border-gray-200 dark:border-slate-700">
@@ -1529,7 +1574,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                 </div>
             )}
 
-            {/* Global Alert & Confirm Modals */}
             {alertConfig.isOpen && (
                 <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 m-0">
                     <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-full max-w-sm p-5">

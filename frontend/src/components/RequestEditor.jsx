@@ -1,37 +1,113 @@
 import React, { useState, useEffect } from 'react';
 import ResponsePane from './ResponsePane';
+import { ApiService } from '../utils/api';
 
 export default function RequestEditor({
-    currentRequest, setCurrentRequest, foldersList, responseState,
-    sendRequest, handleSaveRequest, handleDeleteRequest,
-    setSidebarOpen, setImportModalOpen, showAlert
+    activeWorkspaceId, currentRequest, setCurrentRequest, foldersList, variablesList = [], loadHistory, responseState, setResponseState,
+    handleSaveRequest, handleDeleteRequest, setSidebarOpen, setImportModalOpen, showAlert
 }) {
     const [activeTab, setActiveTab] = useState('params');
     
-    // SNIPPET STATE
     const [showSnippetModal, setShowSnippetModal] = useState(false);
     const [snippetTarget, setSnippetTarget] = useState('curl');
     const [snippetCode, setSnippetCode] = useState('');
     const [snippetLoading, setSnippetLoading] = useState(false);
     const [copied, setCopied] = useState(false);
 
-    // MONITOR STATE
     const [showMonitorModal, setShowMonitorModal] = useState(false);
     const [monitorModalTab, setMonitorModalTab] = useState('list');
     const [monitors, setMonitors] = useState([]);
     const [cronSchedule, setCronSchedule] = useState('0 * * * *');
     const [monitorName, setMonitorName] = useState('');
     const [isSavingMonitor, setIsSavingMonitor] = useState(false);
-    
-    // STATE UNTUK HISTORY MONITOR
     const [expandedMonitorId, setExpandedMonitorId] = useState(null);
     const [monitorHistories, setMonitorHistories] = useState([]);
     const [loadingMonitorHistory, setLoadingMonitorHistory] = useState(false);
 
-    // COMMENTS STATE
     const [comments, setComments] = useState([]);
     const [newComment, setNewComment] = useState('');
     const [loadingComments, setLoadingComments] = useState(false);
+
+    // =====================================
+    // STATE ENVIRONMENT MANAGEMENT 
+    // =====================================
+    const [environments, setEnvironments] = useState([]);
+    const [activeEnvId, setActiveEnvId] = useState('');
+    const [envVariablesMap, setEnvVariablesMap] = useState({});
+    
+    const [showEnvModal, setShowEnvModal] = useState(false);
+    const [newEnvName, setNewEnvName] = useState('');
+
+    // PERBAIKAN: Sinkronisasi ID saat ganti workspace agar tidak bocor
+    useEffect(() => {
+        if (activeWorkspaceId) {
+            setActiveEnvId(localStorage.getItem(`rf_env_${activeWorkspaceId}`) || '');
+            fetchEnvironments();
+        }
+    }, [activeWorkspaceId]);
+
+    const fetchEnvironments = async () => {
+        if (!activeWorkspaceId) return;
+        try {
+            const token = localStorage.getItem('rf_token');
+            const res = await fetch(`/api/workspaces/${activeWorkspaceId}/environments`, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (res.ok) {
+                const data = await res.json();
+                setEnvironments(data);
+                
+                const map = {};
+                for (const env of data) {
+                    const resVar = await fetch(`/api/environments/${env.id}/variables`, { headers: { 'Authorization': `Bearer ${token}` } });
+                    if (resVar.ok) map[env.id] = await resVar.json();
+                }
+                setEnvVariablesMap(map);
+            }
+        } catch(e) {}
+    };
+
+    const handleCreateEnvironment = async () => {
+        if (!newEnvName.trim()) return;
+        try {
+            const token = localStorage.getItem('rf_token');
+            const res = await fetch(`/api/workspaces/${activeWorkspaceId}/environments`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ name: newEnvName.trim() })
+            });
+            if(res.ok) { setNewEnvName(''); fetchEnvironments(); }
+        } catch(e) { if(typeof showAlert==='function') showAlert(e.message, 'error'); }
+    };
+
+    const handleDeleteEnvironment = async (id) => {
+        if (!window.confirm("Hapus environment ini?")) return;
+        try {
+            const token = localStorage.getItem('rf_token');
+            await fetch(`/api/environments/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+            if (activeEnvId === String(id)) { setActiveEnvId(''); localStorage.removeItem(`rf_env_${activeWorkspaceId}`); }
+            fetchEnvironments();
+        } catch(e) {}
+    };
+
+    const handleSaveEnvVariable = async (envId, key, value) => {
+        if (!key.trim()) return;
+        try {
+            const token = localStorage.getItem('rf_token');
+            await fetch(`/api/environments/${envId}/variables`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ var_key: key, var_value: value })
+            });
+            fetchEnvironments();
+        } catch(e) {}
+    };
+
+    const handleDeleteEnvVariable = async (envId, varId) => {
+        try {
+            const token = localStorage.getItem('rf_token');
+            await fetch(`/api/environments/variables/${varId}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+            fetchEnvironments();
+        } catch(e) {}
+    };
 
     const fetchComments = async () => {
         if (!currentRequest?.id) return;
@@ -106,27 +182,16 @@ export default function RequestEditor({
         } catch(e) { if(typeof showAlert === 'function') showAlert(e.message, 'error'); }
     };
 
-    // FUNGSI BARU: TOGGLE & FETCH HISTORI MONITOR (10 Terakhir)
     const toggleMonitorHistory = async (monitorId) => {
-        if (expandedMonitorId === monitorId) {
-            setExpandedMonitorId(null);
-            return;
-        }
+        if (expandedMonitorId === monitorId) { setExpandedMonitorId(null); return; }
         setExpandedMonitorId(monitorId);
         setLoadingMonitorHistory(true);
         try {
             const wsId = localStorage.getItem('rf_active_workspace');
             const token = localStorage.getItem('rf_token');
-            const res = await fetch(`/api/workspaces/${wsId}/monitors/${monitorId}/history`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setMonitorHistories(data);
-            }
-        } catch(e) {} finally {
-            setLoadingMonitorHistory(false);
-        }
+            const res = await fetch(`/api/workspaces/${wsId}/monitors/${monitorId}/history`, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (res.ok) setMonitorHistories(await res.json());
+        } catch(e) {} finally { setLoadingMonitorHistory(false); }
     };
 
     const generateSnippet = async (lang) => {
@@ -248,6 +313,141 @@ export default function RequestEditor({
         a.href = url; a.download = `request-${currentRequest.name.replace(/\s+/g, '-')}.json`; a.click(); URL.revokeObjectURL(url);
     };
 
+    const executeSend = async (e) => {
+        e.preventDefault();
+        if (!currentRequest.url) return;
+
+        if (typeof setResponseState === 'function') setResponseState({ loading: true, data: null, error: null, time: 0, assertions: [] });
+
+        let mergedVars = [...(variablesList || [])];
+        if (activeEnvId && envVariablesMap[activeEnvId]) {
+            envVariablesMap[activeEnvId].forEach(ev => {
+                const idx = mergedVars.findIndex(g => g.var_key === ev.var_key);
+                if (idx > -1) mergedVars[idx] = ev; 
+                else mergedVars.push(ev);
+            });
+        }
+
+        let context = {
+            request: { url: currentRequest.url, method: currentRequest.method, headers: [...currentRequest.headers], body: currentRequest.body },
+            response: null,
+            variables: mergedVars.reduce((acc, v) => ({ ...acc, [v.var_key]: v.var_value }), {})
+        };
+
+        const applyVariables = (text) => {
+            if (!text) return text; let result = String(text);
+            mergedVars.forEach(v => {
+                if (v.var_key && v.var_value !== undefined && v.var_value !== null) {
+                    const regex = new RegExp(`\\{\\{${v.var_key}\\}\\}`, 'g');
+                    result = result.replace(regex, v.var_value);
+                }
+            });
+            return result;
+        };
+
+        try {
+            const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+            if(currentRequest.pre_request_script) {
+                const preFunc = new AsyncFunction('request', 'response', 'variables', currentRequest.pre_request_script);
+                await preFunc(context.request, context.response, context.variables);
+            }
+        } catch (e) {}
+
+        let url = applyVariables(context.request.url);
+        let finalUrl;
+        try { finalUrl = new URL(url); } 
+        catch (err) { return typeof setResponseState === 'function' && setResponseState({ loading: false, data: null, error: 'Invalid URL format', time: 0, assertions: [] }); }
+
+        let finalHeaders = context.request.headers.filter(h => h.key.trim() !== '').map(h => ({ key: applyVariables(h.key), value: applyVariables(h.value) }));
+
+        const auth = currentRequest.authorization;
+        if (auth.type === 'bearer' && auth.token) {
+            finalHeaders.push({ key: 'Authorization', value: `Bearer ${applyVariables(auth.token)}` });
+        } else if (auth.type === 'basic' && auth.username) {
+            finalHeaders.push({ key: 'Authorization', value: `Basic ${btoa(`${applyVariables(auth.username)}:${applyVariables(auth.password)}`)}` });
+        } else if (auth.type === 'apikey' && auth.apikey) {
+            if (auth.addto === 'header') finalHeaders.push({ key: applyVariables(auth.apikey), value: applyVariables(auth.apivalue) });
+            else finalUrl.searchParams.append(applyVariables(auth.apikey), applyVariables(auth.apivalue));
+        }
+
+        try {
+            const rawBody = ['json', 'xml', 'text', 'html'].includes(currentRequest.bodyType) ? context.request.body : '';
+            const processedBody = applyVariables(rawBody);
+
+            const proxyData = {
+                method: context.request.method, url: finalUrl.toString(), headersStr: JSON.stringify(finalHeaders),
+                bodyType: currentRequest.bodyType, bodyContent: processedBody,
+                formDataEntries: currentRequest.bodyType === 'form-data' ? currentRequest.formData.filter(f => f.key.trim() !== '') : [],
+                urlencodedEntries: currentRequest.bodyType === 'urlencoded' ? currentRequest.urlencoded.filter(f => f.key.trim() !== '') : []
+            };
+
+            const response = await ApiService.proxyRequest(proxyData);
+            context.response = response;
+
+            try {
+                const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+                if(currentRequest.post_request_script) {
+                    const postFunc = new AsyncFunction('request', 'response', 'variables', currentRequest.post_request_script);
+                    await postFunc(context.request, context.response, context.variables);
+                }
+            } catch (e) {}
+
+            const assertionsResults = [];
+            const assertionsToRun = currentRequest.assertions.filter(a => a.value && a.value.trim() !== '');
+            let responseBodyStr = typeof response.data === 'object' ? JSON.stringify(response.data) : (response.data || '');
+
+            assertionsToRun.forEach(a => {
+                let passed = false;
+                try {
+                    let targetValue = '';
+                    if (a.type === 'status') targetValue = response.status.toString();
+                    else if (a.type === 'time') targetValue = parseInt(response.time);
+                    else if (a.type === 'body' || a.type === 'body_contains') targetValue = responseBodyStr;
+                    else if (a.type === 'header') targetValue = JSON.stringify(response.headers || {});
+                    
+                    if (a.type === 'time') {
+                        const expectVal = parseInt(a.value);
+                        if (a.operator === 'equals') passed = targetValue === expectVal;
+                        else if (a.operator === 'not_equals') passed = targetValue !== expectVal;
+                        else if (a.operator === 'less_than') passed = targetValue < expectVal;
+                        else if (a.operator === 'greater_than') passed = targetValue > expectVal;
+                    } else {
+                        const expectValStr = a.value.toString();
+                        if (a.operator === 'equals') passed = targetValue === expectValStr;
+                        else if (a.operator === 'not_equals') passed = targetValue !== expectValStr;
+                        else if (a.operator === 'contains') passed = targetValue.includes(expectValStr);
+                        else if (a.operator === 'not_contains') passed = !targetValue.includes(expectValStr);
+                        else if (a.operator === 'less_than') passed = parseInt(targetValue) < parseInt(expectValStr);
+                        else if (a.operator === 'greater_than') passed = parseInt(targetValue) > parseInt(expectValStr);
+                    }
+                } catch(e) { passed = false; }
+                assertionsResults.push({ ...a, passed });
+            });
+
+            if (typeof setResponseState === 'function') setResponseState({ loading: false, data: response, error: null, time: response.time, assertions: assertionsResults });
+
+            try {
+                const token = localStorage.getItem('rf_token');
+                await fetch(`/api/workspaces/${activeWorkspaceId}/history`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({
+                        request_id: currentRequest.id,
+                        name: currentRequest.name || 'Untitled Request',
+                        method: currentRequest.method,
+                        url: finalUrl.toString(),
+                        status: response.status,
+                        time: response.time
+                    })
+                });
+                if(typeof loadHistory === 'function') loadHistory();
+            } catch(e){}
+
+        } catch (err) {
+            if (typeof setResponseState === 'function') setResponseState({ loading: false, data: null, error: err.message, time: 0, assertions: [] });
+        }
+    };
+
     const safeFolders = Array.isArray(foldersList) ? foldersList : [];
 
     return (
@@ -273,6 +473,23 @@ export default function RequestEditor({
                 </div>
                 
                 <div className="flex items-center gap-2 shrink-0 justify-end flex-wrap">
+                    
+                    <div className="flex items-center gap-1 border-r border-gray-300 dark:border-slate-600 pr-3 mr-1">
+                        <i className="fa-solid fa-globe text-gray-400 text-xs hidden md:block"></i>
+                        <select 
+                            value={activeEnvId} 
+                            onChange={e => {
+                                setActiveEnvId(e.target.value);
+                                localStorage.setItem(`rf_env_${activeWorkspaceId}`, e.target.value);
+                            }} 
+                            className="bg-transparent text-sm font-bold text-gray-700 dark:text-gray-300 outline-none w-28 md:w-32 truncate"
+                        >
+                            <option value="">No Environment</option>
+                            {environments.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                        </select>
+                        <button onClick={() => setShowEnvModal(true)} className="p-1 text-gray-400 hover:text-blue-500 transition-colors" title="Manage Environments"><i className="fa-solid fa-cog"></i></button>
+                    </div>
+
                     <button onClick={() => setActiveTab('docs')} className="px-3 py-1.5 text-sm font-medium border border-gray-300 hover:bg-gray-100 dark:border-slate-600 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300 rounded-lg transition-colors flex items-center gap-2">
                         <i className="fa-solid fa-book"></i> <span className="hidden md:inline">Docs</span>
                     </button>
@@ -301,7 +518,7 @@ export default function RequestEditor({
             </div>
 
             <div className="p-2 md:p-4 border-b border-gray-200 dark:border-slate-700 shrink-0 w-full overflow-hidden bg-white dark:bg-slate-900">
-                <form onSubmit={sendRequest} className="flex flex-col md:flex-row gap-2 w-full">
+                <form onSubmit={executeSend} className="flex flex-col md:flex-row gap-2 w-full">
                     <div className="flex w-full flex-grow min-w-0 gap-2">
                         <select value={currentRequest?.method || 'GET'} onChange={e => { if(typeof setCurrentRequest==='function') setCurrentRequest(p => ({...p, method: e.target.value})); }} className={`w-24 shrink-0 font-bold bg-gray-100 dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded-lg px-2 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm method-${currentRequest?.method || 'GET'}`}>
                             <option value="GET">GET</option><option value="POST">POST</option><option value="PUT">PUT</option><option value="PATCH">PATCH</option><option value="DELETE">DELETE</option>
@@ -517,6 +734,67 @@ export default function RequestEditor({
                     <ResponsePane responseState={responseState} />
                 </div>
             </div>
+
+            {/* --- MODAL ENVIRONMENT MANAGEMENT --- */}
+            {showEnvModal && (
+                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                    <div className="bg-white dark:bg-slate-850 w-full max-w-4xl rounded-xl shadow-2xl overflow-hidden border border-gray-200 dark:border-slate-700 flex flex-col h-[70vh]">
+                        <div className="px-4 py-3 border-b border-gray-100 dark:border-slate-700 flex justify-between items-center bg-gray-50 dark:bg-slate-800 shrink-0">
+                            <h3 className="font-bold text-sm flex items-center gap-2"><i className="fa-solid fa-globe text-blue-500"></i> Manage Environments</h3>
+                            <button onClick={() => setShowEnvModal(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"><i className="fa-solid fa-times"></i></button>
+                        </div>
+                        
+                        <div className="flex flex-1 overflow-hidden">
+                            <div className="w-1/3 border-r border-gray-100 dark:border-slate-700 flex flex-col bg-gray-50/50 dark:bg-slate-800/50">
+                                <div className="p-3 border-b border-gray-100 dark:border-slate-700 flex gap-2">
+                                    <input type="text" value={newEnvName} onChange={e => setNewEnvName(e.target.value)} placeholder="New Env..." className="flex-1 px-2 py-1 text-xs border border-gray-300 dark:border-slate-600 rounded bg-white dark:bg-slate-900 outline-none" />
+                                    <button onClick={handleCreateEnvironment} disabled={!newEnvName.trim()} className="px-2 py-1 bg-blue-600 text-white rounded text-xs"><i className="fa-solid fa-plus"></i></button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                                    {environments.length === 0 && <p className="text-center text-xs text-gray-400 italic p-4">Belum ada environment</p>}
+                                    {environments.map(e => (
+                                        <div key={e.id} onClick={() => setActiveEnvId(String(e.id))} className={`px-3 py-2 flex justify-between items-center cursor-pointer rounded-lg text-xs font-bold transition-colors ${activeEnvId === String(e.id) ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-slate-700'}`}>
+                                            <span className="truncate">{e.name}</span>
+                                            <button onClick={(ev) => { ev.stopPropagation(); handleDeleteEnvironment(e.id); }} className="text-gray-400 hover:text-red-500"><i className="fa-solid fa-trash"></i></button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="flex-1 flex flex-col bg-white dark:bg-slate-900">
+                                {!activeEnvId ? (
+                                    <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-3">
+                                        <i className="fa-solid fa-globe text-4xl"></i>
+                                        <p className="text-sm">Pilih environment di samping untuk mengedit variabelnya.</p>
+                                    </div>
+                                ) : (
+                                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                                        <h4 className="font-bold text-sm mb-4 pb-2 border-b border-gray-200 dark:border-slate-700">Variables for: {environments.find(e => String(e.id) === activeEnvId)?.name}</h4>
+                                        <div className="space-y-2">
+                                            {(envVariablesMap[activeEnvId] || []).map((v, i) => (
+                                                <div key={v.id || i} className="flex gap-2 items-center">
+                                                    <input type="text" defaultValue={v.var_key} onBlur={e => handleSaveEnvVariable(activeEnvId, e.target.value, v.var_value)} className="flex-1 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 text-sm font-bold" />
+                                                    <input type="text" defaultValue={v.var_value} onBlur={e => handleSaveEnvVariable(activeEnvId, v.var_key, e.target.value)} className="flex-1 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 text-sm" />
+                                                    <button onClick={() => handleDeleteEnvVariable(activeEnvId, v.id)} className="p-1.5 text-gray-400 hover:text-red-500"><i className="fa-solid fa-trash"></i></button>
+                                                </div>
+                                            ))}
+                                            <div className="flex gap-2 items-center pt-2 border-t border-gray-100 dark:border-slate-800">
+                                                <input type="text" placeholder="New Key" id="new_env_key" className="flex-1 bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 text-sm" />
+                                                <input type="text" placeholder="Value" id="new_env_val" className="flex-1 bg-gray-50 dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 text-sm" />
+                                                <button onClick={() => {
+                                                    const k = document.getElementById('new_env_key').value;
+                                                    const v = document.getElementById('new_env_val').value;
+                                                    if(k) { handleSaveEnvVariable(activeEnvId, k, v); document.getElementById('new_env_key').value = ''; document.getElementById('new_env_val').value = ''; }
+                                                }} className="p-1.5 text-blue-500 hover:text-blue-700 font-bold"><i className="fa-solid fa-save"></i> Save</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* --- MODAL API MONITOR CRON --- */}
             {showMonitorModal && (
