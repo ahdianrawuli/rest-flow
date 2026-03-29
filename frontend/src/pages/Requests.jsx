@@ -14,7 +14,6 @@ export default function Requests({ activeWorkspaceId }) {
     const [importText, setImportText] = useState('');
     const [responseState, setResponseState] = useState({ loading: false, data: null, error: null, time: 0 });
 
-    // State untuk Custom Modals
     const [alertConfig, setAlertConfig] = useState({ isOpen: false, message: '', type: 'info', title: 'Info' });
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
 
@@ -35,7 +34,8 @@ export default function Requests({ activeWorkspaceId }) {
             params: [{ key: '', value: '' }], headers: [{ key: '', value: '' }],
             authorization: { type: 'none', token: '', username: '', password: '', apikey: '', apivalue: '', addto: 'header' },
             bodyType: 'none', body: '', formData: [{ key: '', value: '', type: 'text', file: null }], urlencoded: [{ key: '', value: '' }],
-            pre_request_script: '', post_request_script: '', assertions: [{ type: 'status', operator: 'equals', value: '' }]
+            pre_request_script: '', post_request_script: '', assertions: [{ type: 'status', operator: 'equals', value: '' }],
+            description: ''
         };
     }
 
@@ -69,15 +69,15 @@ export default function Requests({ activeWorkspaceId }) {
                 ApiService.getFolders(activeWorkspaceId),
                 ApiService.getRequests(activeWorkspaceId)
             ]);
-            setFoldersList(folders);
-            setRequestsHistory(requests);
+            setFoldersList(folders || []);
+            setRequestsHistory(requests || []);
         } catch (e) { console.error(e); }
     };
 
     const loadVariables = async () => {
         try {
             const vars = await ApiService.getVariables(activeWorkspaceId);
-            setVariablesList(vars);
+            setVariablesList(vars || []);
         } catch (e) { console.error(e); }
     };
 
@@ -103,21 +103,22 @@ export default function Requests({ activeWorkspaceId }) {
             if (fData.length === 0 || fData[fData.length - 1].key !== '') fData.push({ key: '', value: '', type: 'text', file: null });
             if (urlData.length === 0 || urlData[urlData.length - 1].key !== '') urlData.push({ key: '', value: '' });
 
+            // PERBAIKAN BUG 1: Parsing Parameter Manual (Aman untuk Variabel {{...}})
             let parsedParams = [{ key: '', value: '' }];
-            try {
-                if (req.url) {
-                    const urlObj = new URL(req.url); 
-                    const p = [];
-                    for (const [key, value] of urlObj.searchParams.entries()) p.push({ key, value });
-                    if (p.length > 0) parsedParams = [...p, {key:'', value:''}];
-                }
-            } catch(e) {}
+            if (req.url && req.url.includes('?')) {
+                const queryString = req.url.split('?').slice(1).join('?');
+                const searchParams = new URLSearchParams(queryString);
+                const p = [];
+                for (const [key, value] of searchParams.entries()) p.push({ key, value });
+                if (p.length > 0) parsedParams = [...p, {key:'', value:''}];
+            }
 
             setCurrentRequest({
                 id: req.id, folder_id: req.folder_id, name: req.name, method: req.method, url: req.url || '',
                 params: parsedParams, headers: loadedHeaders, authorization: auth, 
                 pre_request_script: req.pre_request_script || '', post_request_script: req.post_request_script || '',
-                bodyType: bType, body: rawBody, formData: fData, urlencoded: urlData, assertions: loadedAssertions
+                bodyType: bType, body: rawBody, formData: fData, urlencoded: urlData, assertions: loadedAssertions,
+                description: req.description || '' 
             });
 
             setSidebarOpen(false);
@@ -153,7 +154,8 @@ export default function Requests({ activeWorkspaceId }) {
                 assertions: JSON.stringify(cleanAssertions), 
                 authorization: JSON.stringify(currentRequest.authorization), 
                 pre_request_script: currentRequest.pre_request_script, 
-                post_request_script: currentRequest.post_request_script
+                post_request_script: currentRequest.post_request_script,
+                description: currentRequest.description || '' 
             };
 
             const result = await ApiService.saveRequest(activeWorkspaceId, payload);
@@ -214,6 +216,7 @@ export default function Requests({ activeWorkspaceId }) {
                 newReq.bodyType = r.bodyType || r.body_type || 'none';
                 newReq.pre_request_script = r.pre_request_script || '';
                 newReq.post_request_script = r.post_request_script || '';
+                newReq.description = r.description || '';
 
                 if (newReq.bodyType === 'form-data') { 
                     try { 
@@ -234,13 +237,14 @@ export default function Requests({ activeWorkspaceId }) {
                     newReq.body = typeof r.body === 'string' ? r.body : (r.body ? JSON.stringify(r.body) : '');
                 }
 
-                try {
-                    if (newReq.url) {
-                        const urlObj = new URL(newReq.url); const p = [];
-                        for (const [key, value] of urlObj.searchParams.entries()) p.push({ key, value });
-                        if (p.length > 0) newReq.params = [...p, {key:'', value:''}];
-                    }
-                } catch(e) {}
+                // PERBAIKAN BUG 1: Parsing Parameter Manual untuk Injeksi
+                if (newReq.url && newReq.url.includes('?')) {
+                    const queryString = newReq.url.split('?').slice(1).join('?');
+                    const searchParams = new URLSearchParams(queryString);
+                    const p = [];
+                    for (const [key, value] of searchParams.entries()) p.push({ key, value });
+                    if (p.length > 0) newReq.params = [...p, {key:'', value:''}];
+                }
 
             } else if (textToImport.toLowerCase().startsWith('curl')) {
                 let method = 'GET';
@@ -297,13 +301,14 @@ export default function Requests({ activeWorkspaceId }) {
 
                 newReq.name = 'Imported cURL';
                 
-                try {
-                    if (newReq.url) {
-                        const urlObj = new URL(newReq.url); const p = [];
-                        for (const [key, value] of urlObj.searchParams.entries()) p.push({ key, value });
-                        if (p.length > 0) newReq.params = [...p, {key:'', value:''}];
-                    }
-                } catch(e) {}
+                // PERBAIKAN BUG 1: Parsing Parameter Manual untuk cURL
+                if (newReq.url && newReq.url.includes('?')) {
+                    const queryString = newReq.url.split('?').slice(1).join('?');
+                    const searchParams = new URLSearchParams(queryString);
+                    const p = [];
+                    for (const [key, value] of searchParams.entries()) p.push({ key, value });
+                    if (p.length > 0) newReq.params = [...p, {key:'', value:''}];
+                }
 
             } else { throw new Error("Unrecognized format"); }
 
@@ -328,7 +333,8 @@ export default function Requests({ activeWorkspaceId }) {
                 assertions: JSON.stringify(cleanAssertions), 
                 authorization: JSON.stringify(newReq.authorization), 
                 pre_request_script: newReq.pre_request_script, 
-                post_request_script: newReq.post_request_script
+                post_request_script: newReq.post_request_script,
+                description: newReq.description || ''
             };
 
             const result = await ApiService.saveRequest(activeWorkspaceId, payload);
@@ -343,130 +349,6 @@ export default function Requests({ activeWorkspaceId }) {
         } catch (e) { showAlert('Failed to parse import format: ' + e.message, 'error'); }
     };
 
-    const applyVariables = (text) => {
-        if (!text) return text;
-        let result = text;
-        variablesList.forEach(v => {
-            if (v.var_key && v.var_value) {
-                const regex = new RegExp(`{{${v.var_key}}}`, 'g');
-                result = result.replace(regex, v.var_value);
-            }
-        });
-        return result;
-    };
-
-    const runScript = async (scriptCode, context) => {
-        if (!scriptCode || scriptCode.trim() === '') return context;
-        try {
-            const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-            const func = new AsyncFunction('request', 'response', 'variables', scriptCode);
-            await func(context.request, context.response, context.variables);
-        } catch (e) { 
-            console.error('Script error:', e); 
-        }
-        return context;
-    };
-
-    const sendRequest = async (e) => {
-        e.preventDefault();
-        if (!currentRequest.url) return;
-
-        setResponseState({ loading: true, data: null, error: null, time: 0, assertions: [] });
-
-        let context = {
-            request: { url: currentRequest.url, method: currentRequest.method, headers: [...currentRequest.headers], body: currentRequest.body },
-            response: null,
-            variables: variablesList.reduce((acc, v) => ({ ...acc, [v.var_key]: v.var_value }), {})
-        };
-        context = await runScript(currentRequest.pre_request_script, context);
-        let url = applyVariables(context.request.url);
-        let finalUrl = new URL(url);
-        let finalHeaders = context.request.headers.filter(h => h.key.trim() !== '').map(h => ({ key: applyVariables(h.key), value: applyVariables(h.value) }));
-
-        const auth = currentRequest.authorization;
-        if (auth.type === 'bearer' && auth.token) {
-            finalHeaders.push({ key: 'Authorization', value: `Bearer ${applyVariables(auth.token)}` });
-        } else if (auth.type === 'basic' && auth.username) {
-            finalHeaders.push({ key: 'Authorization', value: `Basic ${btoa(`${applyVariables(auth.username)}:${applyVariables(auth.password)}`)}` });
-        } else if (auth.type === 'apikey' && auth.apikey) {
-            if (auth.addto === 'header') finalHeaders.push({ key: applyVariables(auth.apikey), value: applyVariables(auth.apivalue) });
-            else finalUrl.searchParams.append(applyVariables(auth.apikey), applyVariables(auth.apivalue));
-        }
-
-        try {
-            const rawBody = ['json', 'xml', 'text', 'html'].includes(currentRequest.bodyType) ? context.request.body : '';
-            const processedBody = applyVariables(rawBody);
-
-            const proxyData = {
-                method: context.request.method, url: finalUrl.toString(), headersStr: JSON.stringify(finalHeaders),
-                bodyType: currentRequest.bodyType, bodyContent: processedBody,
-                formDataEntries: currentRequest.bodyType === 'form-data' ? currentRequest.formData.filter(f => f.key.trim() !== '') : [],
-                urlencodedEntries: currentRequest.bodyType === 'urlencoded' ? currentRequest.urlencoded.filter(f => f.key.trim() !== '') : []
-            };
-
-            const response = await ApiService.proxyRequest(proxyData);
-            context.response = response;
-            await runScript(currentRequest.post_request_script, context);
-
-            let variablesUpdated = false;
-            for (const key in context.variables) {
-                const existingVar = variablesList.find(v => v.var_key === key);
-                if (!existingVar || existingVar.var_value !== context.variables[key]) {
-                    try {
-                        await ApiService.saveVariable(activeWorkspaceId, key, context.variables[key]);
-                        variablesUpdated = true;
-                    } catch(err) {
-                        console.error("Gagal menyimpan variabel otomatis:", err);
-                    }
-                }
-            }
-            if (variablesUpdated) {
-                loadVariables(); 
-            }
-
-            const assertionsResults = [];
-            const assertionsToRun = currentRequest.assertions.filter(a => a.value && a.value.trim() !== '');
-            let responseBodyStr = typeof response.data === 'object' ? JSON.stringify(response.data) : (response.data || '');
-
-            // PERBAIKAN LOGIKA ASSERTION: Menyelaraskan dengan logika di Scenarios.jsx
-            assertionsToRun.forEach(a => {
-                let passed = false;
-                try {
-                    let targetValue = '';
-                    
-                    // 1. Ekstraksi Target Value berdasarkan tipe assertion
-                    if (a.type === 'status') targetValue = response.status.toString();
-                    else if (a.type === 'time') targetValue = parseInt(response.time);
-                    else if (a.type === 'body' || a.type === 'body_contains') targetValue = responseBodyStr;
-                    else if (a.type === 'header') targetValue = JSON.stringify(response.headers || {});
-                    
-                    // 2. Evaluasi berdasarkan operator
-                    if (a.type === 'time') {
-                        const expectVal = parseInt(a.value);
-                        if (a.operator === 'equals') passed = targetValue === expectVal;
-                        else if (a.operator === 'not_equals') passed = targetValue !== expectVal;
-                        else if (a.operator === 'less_than') passed = targetValue < expectVal;
-                        else if (a.operator === 'greater_than') passed = targetValue > expectVal;
-                    } else {
-                        const expectValStr = a.value.toString();
-                        if (a.operator === 'equals') passed = targetValue === expectValStr;
-                        else if (a.operator === 'not_equals') passed = targetValue !== expectValStr;
-                        else if (a.operator === 'contains') passed = targetValue.includes(expectValStr);
-                        else if (a.operator === 'not_contains') passed = !targetValue.includes(expectValStr);
-                        else if (a.operator === 'less_than') passed = parseInt(targetValue) < parseInt(expectValStr);
-                        else if (a.operator === 'greater_than') passed = parseInt(targetValue) > parseInt(expectValStr);
-                    }
-                } catch(e) { passed = false; }
-                
-                assertionsResults.push({ ...a, passed });
-            });
-
-            setResponseState({ loading: false, data: response, error: null, time: response.time, assertions: assertionsResults });
-        } catch (err) {
-            setResponseState({ loading: false, data: null, error: err.message, time: 0, assertions: [] });
-        }
-    };
-
     return (
         <div className="flex-grow flex overflow-hidden w-full h-full relative">
             <RequestsSidebar
@@ -479,14 +361,129 @@ export default function Requests({ activeWorkspaceId }) {
 
             <RequestEditor
                 currentRequest={currentRequest} setCurrentRequest={setCurrentRequest} foldersList={foldersList}
-                responseState={responseState} sendRequest={sendRequest} handleSaveRequest={handleSaveRequest}
+                responseState={responseState} sendRequest={async (e) => {
+                    e.preventDefault();
+                    if (!currentRequest.url) return;
+
+                    setResponseState({ loading: true, data: null, error: null, time: 0, assertions: [] });
+
+                    let context = {
+                        request: { url: currentRequest.url, method: currentRequest.method, headers: [...currentRequest.headers], body: currentRequest.body },
+                        response: null,
+                        variables: variablesList.reduce((acc, v) => ({ ...acc, [v.var_key]: v.var_value }), {})
+                    };
+
+                    const applyVariables = (text) => {
+                        if (!text) return text; let result = text;
+                        variablesList.forEach(v => {
+                            if (v.var_key && v.var_value) {
+                                const regex = new RegExp(`{{${v.var_key}}}`, 'g');
+                                result = result.replace(regex, v.var_value);
+                            }
+                        });
+                        return result;
+                    };
+
+                    try {
+                        const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+                        if(currentRequest.pre_request_script) {
+                            const preFunc = new AsyncFunction('request', 'response', 'variables', currentRequest.pre_request_script);
+                            await preFunc(context.request, context.response, context.variables);
+                        }
+                    } catch (e) {}
+
+                    let url = applyVariables(context.request.url);
+                    let finalUrl;
+                    try { finalUrl = new URL(url); } 
+                    catch (err) { return setResponseState({ loading: false, data: null, error: 'Invalid URL format', time: 0, assertions: [] }); }
+
+                    let finalHeaders = context.request.headers.filter(h => h.key.trim() !== '').map(h => ({ key: applyVariables(h.key), value: applyVariables(h.value) }));
+
+                    const auth = currentRequest.authorization;
+                    if (auth.type === 'bearer' && auth.token) {
+                        finalHeaders.push({ key: 'Authorization', value: `Bearer ${applyVariables(auth.token)}` });
+                    } else if (auth.type === 'basic' && auth.username) {
+                        finalHeaders.push({ key: 'Authorization', value: `Basic ${btoa(`${applyVariables(auth.username)}:${applyVariables(auth.password)}`)}` });
+                    } else if (auth.type === 'apikey' && auth.apikey) {
+                        if (auth.addto === 'header') finalHeaders.push({ key: applyVariables(auth.apikey), value: applyVariables(auth.apivalue) });
+                        else finalUrl.searchParams.append(applyVariables(auth.apikey), applyVariables(auth.apivalue));
+                    }
+
+                    try {
+                        const rawBody = ['json', 'xml', 'text', 'html'].includes(currentRequest.bodyType) ? context.request.body : '';
+                        const processedBody = applyVariables(rawBody);
+
+                        const proxyData = {
+                            method: context.request.method, url: finalUrl.toString(), headersStr: JSON.stringify(finalHeaders),
+                            bodyType: currentRequest.bodyType, bodyContent: processedBody,
+                            formDataEntries: currentRequest.bodyType === 'form-data' ? currentRequest.formData.filter(f => f.key.trim() !== '') : [],
+                            urlencodedEntries: currentRequest.bodyType === 'urlencoded' ? currentRequest.urlencoded.filter(f => f.key.trim() !== '') : []
+                        };
+
+                        const response = await ApiService.proxyRequest(proxyData);
+                        context.response = response;
+
+                        try {
+                            const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+                            if(currentRequest.post_request_script) {
+                                const postFunc = new AsyncFunction('request', 'response', 'variables', currentRequest.post_request_script);
+                                await postFunc(context.request, context.response, context.variables);
+                            }
+                        } catch (e) {}
+
+                        let variablesUpdated = false;
+                        for (const key in context.variables) {
+                            const existingVar = variablesList.find(v => v.var_key === key);
+                            if (!existingVar || existingVar.var_value !== context.variables[key]) {
+                                try { await ApiService.saveVariable(activeWorkspaceId, key, context.variables[key]); variablesUpdated = true; } catch(err) {}
+                            }
+                        }
+                        if (variablesUpdated) loadVariables(); 
+
+                        const assertionsResults = [];
+                        const assertionsToRun = currentRequest.assertions.filter(a => a.value && a.value.trim() !== '');
+                        let responseBodyStr = typeof response.data === 'object' ? JSON.stringify(response.data) : (response.data || '');
+
+                        assertionsToRun.forEach(a => {
+                            let passed = false;
+                            try {
+                                let targetValue = '';
+                                if (a.type === 'status') targetValue = response.status.toString();
+                                else if (a.type === 'time') targetValue = parseInt(response.time);
+                                else if (a.type === 'body' || a.type === 'body_contains') targetValue = responseBodyStr;
+                                else if (a.type === 'header') targetValue = JSON.stringify(response.headers || {});
+                                
+                                if (a.type === 'time') {
+                                    const expectVal = parseInt(a.value);
+                                    if (a.operator === 'equals') passed = targetValue === expectVal;
+                                    else if (a.operator === 'not_equals') passed = targetValue !== expectVal;
+                                    else if (a.operator === 'less_than') passed = targetValue < expectVal;
+                                    else if (a.operator === 'greater_than') passed = targetValue > expectVal;
+                                } else {
+                                    const expectValStr = a.value.toString();
+                                    if (a.operator === 'equals') passed = targetValue === expectValStr;
+                                    else if (a.operator === 'not_equals') passed = targetValue !== expectValStr;
+                                    else if (a.operator === 'contains') passed = targetValue.includes(expectValStr);
+                                    else if (a.operator === 'not_contains') passed = !targetValue.includes(expectValStr);
+                                    else if (a.operator === 'less_than') passed = parseInt(targetValue) < parseInt(expectValStr);
+                                    else if (a.operator === 'greater_than') passed = parseInt(targetValue) > parseInt(expectValStr);
+                                }
+                            } catch(e) { passed = false; }
+                            assertionsResults.push({ ...a, passed });
+                        });
+
+                        setResponseState({ loading: false, data: response, error: null, time: response.time, assertions: assertionsResults });
+                    } catch (err) {
+                        setResponseState({ loading: false, data: null, error: err.message, time: 0, assertions: [] });
+                    }
+                }} handleSaveRequest={handleSaveRequest}
                 handleDeleteRequest={handleDeleteRequestTrigger} setSidebarOpen={setSidebarOpen} setImportModalOpen={setImportModalOpen}
                 showAlert={showAlert}
             />
 
             {/* Import Modal */}
             {importModalOpen && (
-                <div className="fixed top-0 left-0 w-screen h-[100dvh] bg-black/50 z-[9999] flex items-center justify-center p-4 backdrop-blur-sm m-0">
+                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm m-0">
                     <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-lg overflow-hidden border border-gray-200 dark:border-slate-700">
                         <div className="px-5 py-4 border-b border-gray-100 dark:border-slate-700 flex justify-between items-center">
                             <h3 className="font-bold text-lg text-gray-800 dark:text-gray-200">Import Request</h3>
@@ -516,43 +513,34 @@ export default function Requests({ activeWorkspaceId }) {
                 </div>
             )}
 
-            {/* --- GLOBAL NOTIFICATIONS & MODALS --- */}
-            
             {/* Global Alert Modal */}
             {alertConfig.isOpen && (
-                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-                    <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-full max-w-sm overflow-hidden transform transition-all">
-                        <div className="p-5">
-                            <div className="flex items-center gap-3 mb-4">
-                                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-                                    alertConfig.type === 'success' ? 'bg-green-100 dark:bg-green-900/30' :
-                                    alertConfig.type === 'error' ? 'bg-red-100 dark:bg-red-900/30' :
-                                    alertConfig.type === 'warning' ? 'bg-yellow-100 dark:bg-yellow-900/30' :
-                                    'bg-blue-100 dark:bg-blue-900/30'
-                                }`}>
-                                    {alertConfig.type === 'success' && <i className="fa-solid fa-check text-green-600 dark:text-green-400 text-lg"></i>}
-                                    {alertConfig.type === 'error' && <i className="fa-solid fa-circle-xmark text-red-600 dark:text-red-400 text-lg"></i>}
-                                    {alertConfig.type === 'warning' && <i className="fa-solid fa-triangle-exclamation text-yellow-600 dark:text-yellow-400 text-lg"></i>}
-                                    {alertConfig.type === 'info' && <i className="fa-solid fa-circle-info text-blue-600 dark:text-blue-400 text-lg"></i>}
-                                </div>
-                                <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200">{alertConfig.title}</h3>
-                            </div>
-                            <p className={`text-sm text-gray-600 dark:text-gray-400 mb-6 border-l-4 pl-3 py-1 ${
-                                alertConfig.type === 'success' ? 'border-green-500 bg-green-50 dark:bg-green-900/10' :
-                                alertConfig.type === 'error' ? 'border-red-500 bg-red-50 dark:bg-red-900/10' :
-                                alertConfig.type === 'warning' ? 'border-yellow-500 bg-yellow-50 dark:bg-yellow-900/10' :
-                                'border-blue-500 bg-blue-50 dark:bg-blue-900/10'
+                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 m-0">
+                    <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-full max-w-sm p-5 transform transition-all">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                                alertConfig.type === 'success' ? 'bg-green-100 dark:bg-green-900/30' :
+                                alertConfig.type === 'error' ? 'bg-red-100 dark:bg-red-900/30' :
+                                alertConfig.type === 'warning' ? 'bg-yellow-100 dark:bg-yellow-900/30' :
+                                'bg-blue-100 dark:bg-blue-900/30'
                             }`}>
-                                {alertConfig.message}
-                            </p>
-                            <div className="flex justify-end">
-                                <button 
-                                    onClick={() => setAlertConfig({ ...alertConfig, isOpen: false })} 
-                                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors"
-                                >
-                                    Okay
-                                </button>
+                                {alertConfig.type === 'success' && <i className="fa-solid fa-check text-green-600 dark:text-green-400 text-lg"></i>}
+                                {alertConfig.type === 'error' && <i className="fa-solid fa-circle-xmark text-red-600 dark:text-red-400 text-lg"></i>}
+                                {alertConfig.type === 'warning' && <i className="fa-solid fa-triangle-exclamation text-yellow-600 dark:text-yellow-400 text-lg"></i>}
+                                {alertConfig.type === 'info' && <i className="fa-solid fa-circle-info text-blue-600 dark:text-blue-400 text-lg"></i>}
                             </div>
+                            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200">{alertConfig.title}</h3>
+                        </div>
+                        <p className={`text-sm text-gray-600 dark:text-gray-400 mb-6 border-l-4 pl-3 py-1 ${
+                            alertConfig.type === 'success' ? 'border-green-500 bg-green-50 dark:bg-green-900/10' :
+                            alertConfig.type === 'error' ? 'border-red-500 bg-red-50 dark:bg-red-900/10' :
+                            alertConfig.type === 'warning' ? 'border-yellow-500 bg-yellow-50 dark:bg-yellow-900/10' :
+                            'border-blue-500 bg-blue-50 dark:bg-blue-900/10'
+                        }`}>
+                            {alertConfig.message}
+                        </p>
+                        <div className="flex justify-end">
+                            <button onClick={() => setAlertConfig({ ...alertConfig, isOpen: false })} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors">Okay</button>
                         </div>
                     </div>
                 </div>
@@ -560,32 +548,20 @@ export default function Requests({ activeWorkspaceId }) {
 
             {/* Confirm Delete Request Modal */}
             {deleteModalOpen && (
-                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-                    <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-full max-w-sm overflow-hidden transform transition-all">
-                        <div className="p-5">
-                            <div className="flex items-center gap-3 mb-4">
-                                <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
-                                    <i className="fa-solid fa-trash text-red-600 dark:text-red-400 text-lg"></i>
-                                </div>
-                                <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Delete Request</h3>
+                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 m-0">
+                    <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-full max-w-sm p-5 transform transition-all">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
+                                <i className="fa-solid fa-trash text-red-600 dark:text-red-400 text-lg"></i>
                             </div>
-                            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-                                Are you sure you want to delete <span className="font-semibold text-gray-800 dark:text-gray-200">"{currentRequest.name || 'this request'}"</span>? This action cannot be undone.
-                            </p>
-                            <div className="flex justify-end gap-2">
-                                <button 
-                                    onClick={() => setDeleteModalOpen(false)} 
-                                    className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 rounded-md transition-colors"
-                                >
-                                    Cancel
-                                </button>
-                                <button 
-                                    onClick={executeDeleteRequest} 
-                                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md transition-colors"
-                                >
-                                    Yes, Delete
-                                </button>
-                            </div>
+                            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Delete Request</h3>
+                        </div>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+                            Are you sure you want to delete <span className="font-semibold text-gray-800 dark:text-gray-200">"{currentRequest.name || 'this request'}"</span>? This action cannot be undone.
+                        </p>
+                        <div className="flex justify-end gap-2">
+                            <button onClick={() => setDeleteModalOpen(false)} className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-slate-700 hover:bg-gray-200 dark:hover:bg-slate-600 rounded-md transition-colors">Cancel</button>
+                            <button onClick={executeDeleteRequest} className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md transition-colors">Yes, Delete</button>
                         </div>
                     </div>
                 </div>

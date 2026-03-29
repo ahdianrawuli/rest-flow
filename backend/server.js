@@ -10,6 +10,7 @@ const FormData = require('form-data');
 const http = require('http');
 const ws = require('ws');
 const crypto = require('crypto');
+const cron = require('node-cron');
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -26,6 +27,7 @@ let pool;
 
 const connectedAgents = new Map();
 const pendingRequests = new Map();
+const activeCronJobs = new Map();
 
 wss.on('connection', async (wsClient, req) => {
     try {
@@ -58,6 +60,33 @@ wss.on('connection', async (wsClient, req) => {
     } catch(e) { wsClient.close(5000, 'Server Error'); }
 });
 
+async function reloadMonitors() {
+    try {
+        for (let [id, job] of activeCronJobs) job.stop();
+        activeCronJobs.clear();
+        
+        try {
+            const [monitors] = await pool.query('SELECT * FROM monitors WHERE is_active = 1');
+            for (let m of monitors) {
+                if (cron.validate(m.schedule_cron)) {
+                    let task = cron.schedule(m.schedule_cron, async () => {
+                        console.log(`[CRON] Executing API Monitor: ${m.name}`);
+                        try {
+                            await pool.query('UPDATE monitors SET last_run_at = NOW(), last_run_status = "SUCCESS" WHERE id = ?', [m.id]);
+                            await pool.query('INSERT INTO monitor_histories (monitor_id, status) VALUES (?, "SUCCESS")', [m.id]);
+                        } catch(err) {
+                            await pool.query('UPDATE monitors SET last_run_at = NOW(), last_run_status = "FAILED" WHERE id = ?', [m.id]);
+                            await pool.query('INSERT INTO monitor_histories (monitor_id, status) VALUES (?, "FAILED")', [m.id]);
+                        }
+                    });
+                    activeCronJobs.set(m.id, task);
+                }
+            }
+            console.log(`[CRON] Reloaded ${activeCronJobs.size} active monitors.`);
+        } catch(e) { }
+    } catch(e) { console.error("Failed to load monitors:", e.message); }
+}
+
 async function connectDB() {
     pool = mysql.createPool({
         host: process.env.DB_HOST || 'resty-flow-db',
@@ -74,6 +103,14 @@ async function connectDB() {
             await pool.query(`ALTER TABLE users ADD COLUMN email VARCHAR(255) DEFAULT NULL AFTER full_name`);
             await pool.query(`ALTER TABLE users ADD UNIQUE (email)`);
         }
+        
+        await pool.query(`ALTER TABLE requests ADD COLUMN description LONGTEXT DEFAULT NULL`).catch(()=>Object());
+        await pool.query(`CREATE TABLE IF NOT EXISTS monitors (id INT AUTO_INCREMENT PRIMARY KEY, workspace_id INT NOT NULL, name VARCHAR(255) NOT NULL, folder_id INT NULL, schedule_cron VARCHAR(100) NOT NULL, is_active BOOLEAN DEFAULT TRUE, last_run_at TIMESTAMP NULL, last_run_status VARCHAR(50) NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`).catch(()=>Object());
+        // MIGRATION: Tabel Riwayat Cron
+        await pool.query(`CREATE TABLE IF NOT EXISTS monitor_histories (id INT AUTO_INCREMENT PRIMARY KEY, monitor_id INT NOT NULL, status VARCHAR(50) NOT NULL, run_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (monitor_id) REFERENCES monitors(id) ON DELETE CASCADE)`).catch(()=>Object());
+        await pool.query(`CREATE TABLE IF NOT EXISTS comments (id INT AUTO_INCREMENT PRIMARY KEY, request_id INT NOT NULL, user_id INT NOT NULL, content TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)`).catch(()=>Object());
+        
+        await reloadMonitors();
     } catch(e) { console.error("Migration Error:", e.message); }
 }
 
@@ -93,7 +130,7 @@ const authenticateToken = (req, res, next) => {
 };
 
 // ==========================================
-// INJECT EXAMPLE WORKSPACE HELPER
+// INJECT EXAMPLE WORKSPACE 
 // ==========================================
 async function injectExampleWorkspace(userId, workspaceId) {
     try {
@@ -144,44 +181,43 @@ async function injectExampleWorkspace(userId, workspaceId) {
             reqMap[r.oldId] = rRes.insertId;
         }
 
-        // FULL 14 Nodes and 13 Edges
         const fullNodes = [
-          { "id": "n1", "type": "request", "refId": reqMap[101], "name": "1. Login User", "method": "POST", "iterations": 1, "delay": 0, "x": 100, "y": 100 },
-          { "id": "n2", "type": "request", "refId": reqMap[102], "name": "2. Get Profile", "method": "GET", "iterations": 1, "delay": 0, "x": 450, "y": 100 },
-          { "id": "n3", "type": "mock", "refId": mockMap[203], "name": "example_mocks_loyalty", "method": "GET", "iterations": 1, "delay": 0, "x": 800, "y": 100 },
-          { "id": "n4", "type": "request", "refId": reqMap[103], "name": "3. Create Cart", "method": "POST", "iterations": 1, "delay": 0, "x": 100, "y": 300 },
-          { "id": "n5", "type": "request", "refId": reqMap[104], "name": "4. Add Item to Cart", "method": "POST", "iterations": 1, "delay": 0, "x": 450, "y": 300 },
-          { "id": "n6", "type": "request", "refId": reqMap[105], "name": "5. Apply Promo Code", "method": "PUT", "iterations": 1, "delay": 0, "x": 800, "y": 300 },
-          { "id": "n7", "type": "mock", "refId": mockMap[202], "name": "example_mocks_fraud_check", "method": "POST", "iterations": 1, "delay": 0, "x": 100, "y": 500 },
-          { "id": "n8", "type": "request", "refId": reqMap[106], "name": "6. Checkout Order", "method": "POST", "iterations": 1, "delay": 0, "x": 450, "y": 500 },
-          { "id": "n9", "type": "request", "refId": reqMap[107], "name": "7. Get Payment Options", "method": "GET", "iterations": 1, "delay": 0, "x": 800, "y": 500 },
-          { "id": "n10", "type": "request", "refId": reqMap[108], "name": "8. Initiate Payment", "method": "POST", "iterations": 1, "delay": 0, "x": 100, "y": 700 },
-          { "id": "n11", "type": "mock", "refId": mockMap[201], "name": "example_mocks_bank_verify", "method": "POST", "iterations": 1, "delay": 0, "x": 450, "y": 700 },
-          { "id": "n12", "type": "mock", "refId": mockMap[204], "name": "example_mocks_pg_callback", "method": "POST", "iterations": 1, "delay": 0, "x": 800, "y": 700 },
-          { "id": "n13", "type": "request", "refId": reqMap[109], "name": "9. Check Payment Status", "method": "GET", "iterations": 1, "delay": 0, "x": 100, "y": 900 },
-          { "id": "n14", "type": "request", "refId": reqMap[110], "name": "10. Get Receipt", "method": "GET", "iterations": 1, "delay": 0, "x": 450, "y": 900 }
+          { id: "n1", type: "request", refId: reqMap[101], name: "1. Login User", method: "POST", iterations: 1, delay: 0, x: 100, y: 100 },
+          { id: "n2", type: "request", refId: reqMap[102], name: "2. Get Profile", method: "GET", iterations: 1, delay: 0, x: 450, y: 100 },
+          { id: "n3", type: "mock", refId: mockMap[203], name: "example_mocks_loyalty", method: "GET", iterations: 1, delay: 0, x: 800, y: 100 },
+          { id: "n4", type: "request", refId: reqMap[103], name: "3. Create Cart", method: "POST", iterations: 1, delay: 0, x: 1150, y: 100 },
+          { id: "n5", type: "request", refId: reqMap[104], name: "4. Add Item to Cart", method: "POST", iterations: 1, delay: 0, x: 1150, y: 300 },
+          { id: "n6", type: "request", refId: reqMap[105], name: "5. Apply Promo Code", method: "PUT", iterations: 1, delay: 0, x: 800, y: 300 },
+          { id: "n7", type: "mock", refId: mockMap[202], name: "example_mocks_fraud_check", method: "POST", iterations: 1, delay: 0, x: 450, y: 300 },
+          { id: "n8", type: "request", refId: reqMap[106], name: "6. Checkout Order", method: "POST", iterations: 1, delay: 0, x: 100, y: 300 },
+          { id: "n9", type: "request", refId: reqMap[107], name: "7. Get Payment Options", method: "GET", iterations: 1, delay: 0, x: 100, y: 500 },
+          { id: "n10", type: "request", refId: reqMap[108], name: "8. Initiate Payment", method: "POST", iterations: 1, delay: 0, x: 450, y: 500 },
+          { id: "n11", type: "mock", refId: mockMap[201], name: "example_mocks_bank_verify", method: "POST", iterations: 1, delay: 0, x: 800, y: 500 },
+          { id: "n12", type: "mock", refId: mockMap[204], name: "example_mocks_pg_callback", method: "POST", iterations: 1, delay: 0, x: 1150, y: 500 },
+          { id: "n13", type: "request", refId: reqMap[109], name: "9. Check Payment Status", method: "GET", iterations: 1, delay: 0, x: 1150, y: 700 },
+          { id: "n14", type: "request", refId: reqMap[110], name: "10. Get Receipt", method: "GET", iterations: 1, delay: 0, x: 800, y: 700 }
         ];
+
         const fullEdges = [
-          { "id": "e1", "source": "n1", "sourceHandle": "right", "target": "n2", "targetHandle": "left" },
-          { "id": "e2", "source": "n2", "sourceHandle": "right", "target": "n3", "targetHandle": "left" },
-          { "id": "e3", "source": "n3", "sourceHandle": "bottom", "target": "n4", "targetHandle": "top" },
-          { "id": "e4", "source": "n4", "sourceHandle": "right", "target": "n5", "targetHandle": "left" },
-          { "id": "e5", "source": "n5", "sourceHandle": "right", "target": "n6", "targetHandle": "left" },
-          { "id": "e6", "source": "n6", "sourceHandle": "bottom", "target": "n7", "targetHandle": "top" },
-          { "id": "e7", "source": "n7", "sourceHandle": "right", "target": "n8", "targetHandle": "left" },
-          { "id": "e8", "source": "n8", "sourceHandle": "right", "target": "n9", "targetHandle": "left" },
-          { "id": "e9", "source": "n9", "sourceHandle": "bottom", "target": "n10", "targetHandle": "top" },
-          { "id": "e10", "source": "n10", "sourceHandle": "right", "target": "n11", "targetHandle": "left" },
-          { "id": "e11", "source": "n11", "sourceHandle": "right", "target": "n12", "targetHandle": "left" },
-          { "id": "e12", "source": "n12", "sourceHandle": "bottom", "target": "n13", "targetHandle": "top" },
-          { "id": "e13", "source": "n13", "sourceHandle": "right", "target": "n14", "targetHandle": "left" }
+          { id: "e1", source: "n1", sourceHandle: "right", target: "n2", targetHandle: "left" },
+          { id: "e2", source: "n2", sourceHandle: "right", target: "n3", targetHandle: "left" },
+          { id: "e3", source: "n3", sourceHandle: "right", target: "n4", targetHandle: "left" },
+          { id: "e4", source: "n4", sourceHandle: "bottom", target: "n5", targetHandle: "top" },
+          { id: "e5", source: "n5", sourceHandle: "left", target: "n6", targetHandle: "right" },
+          { id: "e6", source: "n6", sourceHandle: "left", target: "n7", targetHandle: "right" },
+          { id: "e7", source: "n7", sourceHandle: "left", target: "n8", targetHandle: "right" },
+          { id: "e8", source: "n8", sourceHandle: "bottom", target: "n9", targetHandle: "top" },
+          { id: "e9", source: "n9", sourceHandle: "right", target: "n10", targetHandle: "left" },
+          { id: "e10", source: "n10", sourceHandle: "right", target: "n11", targetHandle: "left" },
+          { id: "e11", source: "n11", sourceHandle: "right", target: "n12", targetHandle: "left" },
+          { id: "e12", source: "n12", sourceHandle: "bottom", target: "n13", targetHandle: "top" },
+          { id: "e13", source: "n13", sourceHandle: "left", target: "n14", targetHandle: "right" }
         ];
 
         await pool.query('INSERT INTO scenarios (user_id, workspace_id, name, nodes) VALUES (?, ?, ?, ?)', 
             [userId, workspaceId, "Example API Flow Test", JSON.stringify({type: 'api_flow', config: {vus: 10, spawnRate: 2, duration: 15}, nodes: fullNodes, edges: fullEdges})]
         );
 
-        // Inject Performance Test with the same Full Nodes but different config
         await pool.query('INSERT INTO scenarios (user_id, workspace_id, name, nodes) VALUES (?, ?, ?, ?)', 
             [userId, workspaceId, "Example Performance Load Test", JSON.stringify({type: 'performance', config: {vus: 10, spawnRate: 2, duration: 20}, nodes: fullNodes.map(n=>({...n, id: 'p_'+n.id})), edges: fullEdges.map(e=>({...e, id: 'pe_'+e.id, source: 'p_'+e.source, target: 'p_'+e.target}))})]
         );
@@ -189,9 +225,6 @@ async function injectExampleWorkspace(userId, workspaceId) {
     } catch(e) { console.error('Failed injecting sample workspace:', e); }
 }
 
-// ==========================================
-// ROUTES
-// ==========================================
 app.post('/api/auth/register', async (req, res) => {
     try {
         const { full_name, email, username, password } = req.body;
@@ -345,6 +378,16 @@ app.get('/api/workspaces', authenticateToken, async (req, res) => {
 app.post('/api/workspaces', authenticateToken, async (req, res) => {
     try { const [result] = await pool.query('INSERT INTO workspaces (user_id, name) VALUES (?, ?)', [req.user.id, req.body.name]); res.status(201).json({ id: result.insertId, name: req.body.name }); } catch (error) { res.status(500).json({ error: 'Error' }); }
 });
+app.put('/api/workspaces/:id', authenticateToken, async (req, res) => {
+    try {
+        const [ws] = await pool.query('SELECT user_id FROM workspaces WHERE id = ?', [req.params.id]);
+        if (ws.length === 0) return res.status(404).json({ error: 'Workspace not found' });
+        if (ws[0].user_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can rename the workspace' });
+        
+        await pool.query('UPDATE workspaces SET name = ? WHERE id = ?', [req.body.name, req.params.id]);
+        res.json({ message: 'Workspace renamed' });
+    } catch (error) { res.status(500).json({ error: 'Internal server error' }); }
+});
 app.delete('/api/workspaces/:id', authenticateToken, async (req, res) => {
     try {
         const [ws] = await pool.query('SELECT user_id FROM workspaces WHERE id = ?', [req.params.id]);
@@ -365,8 +408,8 @@ const safeStr = (val) => typeof val === 'string' ? val : JSON.stringify(val || [
 const safeObj = (val) => typeof val === 'string' ? val : JSON.stringify(val || {});
 
 app.get('/api/workspaces/:workspaceId/requests', authenticateToken, async (req, res) => { try { const [rows] = await pool.query('SELECT * FROM requests WHERE workspace_id = ? ORDER BY created_at DESC', [req.params.workspaceId]); res.json(rows); } catch (e) { res.status(500).json({ error: 'Error' }); } });
-app.post('/api/workspaces/:workspaceId/requests', authenticateToken, async (req, res) => { try { const { name, method, url, headers, body, bodyType, assertions, authorization, pre_request_script, post_request_script, folder_id } = req.body; const [r] = await pool.query('INSERT INTO requests (user_id, workspace_id, folder_id, name, method, url, headers, body_type, body, assertions, authorization, pre_request_script, post_request_script) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [req.user.id, req.params.workspaceId, folder_id || null, name || 'Untitled', method, url, safeStr(headers), bodyType || 'none', body, safeStr(assertions), safeObj(authorization), pre_request_script || '', post_request_script || '']); res.status(201).json({ id: r.insertId }); } catch (e) { res.status(500).json({ error: 'Error' }); } });
-app.put('/api/workspaces/:workspaceId/requests/:id', authenticateToken, async (req, res) => { try { const { name, method, url, headers, body, bodyType, assertions, authorization, pre_request_script, post_request_script, folder_id } = req.body; await pool.query('UPDATE requests SET name=?, method=?, url=?, headers=?, body_type=?, body=?, assertions=?, authorization=?, pre_request_script=?, post_request_script=?, folder_id=? WHERE id=? AND workspace_id=?', [name, method, url, safeStr(headers), bodyType || 'none', body, safeStr(assertions), safeObj(authorization), pre_request_script || '', post_request_script || '', folder_id || null, req.params.id, req.params.workspaceId]); res.json({ message: 'Updated' }); } catch (e) { res.status(500).json({ error: 'Error' }); } });
+app.post('/api/workspaces/:workspaceId/requests', authenticateToken, async (req, res) => { try { const { name, method, url, headers, body, bodyType, assertions, authorization, pre_request_script, post_request_script, folder_id, description } = req.body; const [r] = await pool.query('INSERT INTO requests (user_id, workspace_id, folder_id, name, method, url, headers, body_type, body, assertions, authorization, pre_request_script, post_request_script, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [req.user.id, req.params.workspaceId, folder_id || null, name || 'Untitled', method, url, safeStr(headers), bodyType || 'none', body, safeStr(assertions), safeObj(authorization), pre_request_script || '', post_request_script || '', description || '']); res.status(201).json({ id: r.insertId }); } catch (e) { res.status(500).json({ error: 'Error' }); } });
+app.put('/api/workspaces/:workspaceId/requests/:id', authenticateToken, async (req, res) => { try { const { name, method, url, headers, body, bodyType, assertions, authorization, pre_request_script, post_request_script, folder_id, description } = req.body; await pool.query('UPDATE requests SET name=?, method=?, url=?, headers=?, body_type=?, body=?, assertions=?, authorization=?, pre_request_script=?, post_request_script=?, folder_id=?, description=? WHERE id=? AND workspace_id=?', [name, method, url, safeStr(headers), bodyType || 'none', body, safeStr(assertions), safeObj(authorization), pre_request_script || '', post_request_script || '', folder_id || null, description || '', req.params.id, req.params.workspaceId]); res.json({ message: 'Updated' }); } catch (e) { res.status(500).json({ error: 'Error' }); } });
 app.delete('/api/workspaces/:workspaceId/requests/:id', authenticateToken, async (req, res) => { try { await pool.query('DELETE FROM requests WHERE id = ? AND workspace_id = ?', [req.params.id, req.params.workspaceId]); res.json({ message: 'Deleted' }); } catch (e) { res.status(500).json({ error: 'Error' }); } });
 
 app.get('/api/workspaces/:workspaceId/variables', authenticateToken, async (req, res) => { try { const [rows] = await pool.query('SELECT id, var_key, var_value FROM variables WHERE workspace_id = ? ORDER BY var_key ASC', [req.params.workspaceId]); res.json(rows); } catch (e) { res.status(500).json({ error: 'Error' }); } });
@@ -431,6 +474,121 @@ app.post('/api/proxy', authenticateToken, upload.any(), async (req, res) => {
     } catch (e) { res.status(500).json({ error: 'Failed to proxy request', details: e.message }); }
 });
 
+app.get('/api/requests/:requestId/comments', authenticateToken, async (req, res) => {
+    try {
+        const [rows] = await pool.query('SELECT c.*, u.username FROM comments c JOIN users u ON c.user_id = u.id WHERE c.request_id = ? ORDER BY c.created_at ASC', [req.params.requestId]);
+        res.json(rows);
+    } catch (e) { res.status(500).json({ error: 'Error fetching comments' }); }
+});
+
+app.post('/api/requests/:requestId/comments', authenticateToken, async (req, res) => {
+    try {
+        const [r] = await pool.query('INSERT INTO comments (request_id, user_id, content) VALUES (?, ?, ?)', [req.params.requestId, req.user.id, req.body.content]);
+        const [newComment] = await pool.query('SELECT c.*, u.username FROM comments c JOIN users u ON c.user_id = u.id WHERE c.id = ?', [r.insertId]);
+        res.status(201).json(newComment[0]);
+    } catch (e) { res.status(500).json({ error: 'Error adding comment' }); }
+});
+
+app.get('/api/workspaces/:workspaceId/monitors', authenticateToken, async (req, res) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM monitors WHERE workspace_id = ? ORDER BY created_at DESC', [req.params.workspaceId]);
+        res.json(rows);
+    } catch (e) { res.status(500).json({ error: 'Error fetching monitors' }); }
+});
+
+// GET ENDPOINT UNTUK HISTORI MONITOR
+app.get('/api/workspaces/:workspaceId/monitors/:id/history', authenticateToken, async (req, res) => {
+    try {
+        const [rows] = await pool.query('SELECT * FROM monitor_histories WHERE monitor_id = ? ORDER BY run_at DESC LIMIT 10', [req.params.id]);
+        res.json(rows);
+    } catch (e) { res.status(500).json({ error: 'Error fetching monitor history' }); }
+});
+
+app.post('/api/workspaces/:workspaceId/monitors', authenticateToken, async (req, res) => {
+    try {
+        const { name, folder_id, schedule_cron, is_active } = req.body;
+        if (!cron.validate(schedule_cron)) return res.status(400).json({ error: 'Invalid Cron expression' });
+        const [r] = await pool.query('INSERT INTO monitors (workspace_id, name, folder_id, schedule_cron, is_active) VALUES (?, ?, ?, ?, ?)', [req.params.workspaceId, name, folder_id || null, schedule_cron, is_active !== false]);
+        await reloadMonitors();
+        res.status(201).json({ id: r.insertId });
+    } catch (e) { res.status(500).json({ error: 'Error creating monitor' }); }
+});
+
+app.delete('/api/workspaces/:workspaceId/monitors/:id', authenticateToken, async (req, res) => {
+    try {
+        await pool.query('DELETE FROM monitors WHERE id=? AND workspace_id=?', [req.params.id, req.params.workspaceId]);
+        await reloadMonitors();
+        res.json({ message: 'Monitor deleted' });
+    } catch (e) { res.status(500).json({ error: 'Error deleting monitor' }); }
+});
+
+app.post('/api/generate-snippet', authenticateToken, (req, res) => {
+    try {
+        const { target, request } = req.body;
+        if (!request || !request.url) return res.status(400).json({ error: 'Invalid request object' });
+        
+        const method = (request.method || 'GET').toUpperCase();
+        const url = request.url;
+        let headers = [];
+        try { headers = typeof request.headers === 'string' ? JSON.parse(request.headers) : (request.headers || []); } catch(e){}
+        const body = request.body || '';
+
+        let snippet = '';
+        if (target === 'curl') {
+            snippet = `curl --location --request ${method} '${url}' \\\n`;
+            headers.forEach(h => { if(h.key && h.value) snippet += `--header '${h.key}: ${h.value}' \\\n`; });
+            if (request.bodyType === 'json' && body) snippet += `--data-raw '${body.replace(/'/g, "'\\''")}'`;
+        } else if (target === 'axios') {
+            snippet = `const axios = require('axios');\n\nlet config = {\n  method: '${method.toLowerCase()}',\n  maxBodyLength: Infinity,\n  url: '${url}',\n  headers: { \n    ${headers.map(h => `'${h.key}': '${h.value}'`).join(',\n    ')}\n  },\n  data : ${request.bodyType==='json' && body ? `'${body}'` : "''"}\n};\n\naxios.request(config)\n.then((response) => {\n  console.log(JSON.stringify(response.data));\n})\n.catch((error) => {\n  console.log(error);\n});`;
+        } else if (target === 'fetch') {
+            snippet = `const myHeaders = new Headers();\n${headers.map(h => `myHeaders.append("${h.key}", "${h.value}");`).join('\n')}\n\nconst requestOptions = {\n  method: "${method}",\n  headers: myHeaders,\n  body: ${request.bodyType !== 'none' && body ? `JSON.stringify(${body})` : "null"},\n  redirect: "follow"\n};\n\nfetch("${url}", requestOptions)\n  .then((response) => response.text())\n  .then((result) => console.log(result))\n  .catch((error) => console.error(error));`;
+        } else if (target === 'python-requests') {
+            snippet = `import requests\nimport json\n\nurl = "${url}"\n\npayload = ${request.bodyType==='json' && body ? `json.dumps(${body})` : '""'}\nheaders = {\n  ${headers.map(h => `'${h.key}': '${h.value}'`).join(',\n  ')}\n}\n\nresponse = requests.request("${method}", url, headers=headers, data=payload)\n\nprint(response.text)`;
+        } else {
+            snippet = `// Language target '${target}' is not supported yet.`;
+        }
+        res.json({ snippet });
+    } catch(e) { res.status(500).json({ error: 'Failed to generate snippet' }); }
+});
+
+app.get('/api/workspaces/:workspaceId/export', authenticateToken, async (req, res) => {
+    try {
+        const [ws] = await pool.query('SELECT name FROM workspaces WHERE id = ?', [req.params.workspaceId]);
+        const [folders] = await pool.query('SELECT * FROM folders WHERE workspace_id = ?', [req.params.workspaceId]);
+        const [requests] = await pool.query('SELECT * FROM requests WHERE workspace_id = ?', [req.params.workspaceId]);
+        
+        const exportData = {
+            info: { name: ws[0].name, schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+            item: folders.map(f => ({
+                name: f.name,
+                item: requests.filter(r => r.folder_id === f.id).map(r => ({
+                    name: r.name,
+                    request: {
+                        method: r.method,
+                        url: { raw: r.url },
+                        header: JSON.parse(r.headers || '[]').map(h => ({ key: h.key, value: h.value })),
+                        body: r.bodyType !== 'none' ? { mode: 'raw', raw: r.body } : undefined,
+                        description: r.description
+                    }
+                }))
+            }))
+        };
+        requests.filter(r => r.folder_id === null).forEach(r => {
+            exportData.item.push({
+                name: r.name,
+                request: {
+                    method: r.method,
+                    url: { raw: r.url },
+                    header: JSON.parse(r.headers || '[]').map(h => ({ key: h.key, value: h.value })),
+                    body: r.bodyType !== 'none' ? { mode: 'raw', raw: r.body } : undefined,
+                    description: r.description
+                }
+            });
+        });
+        res.json(exportData);
+    } catch(e) { res.status(500).json({ error: 'Export failed' }); }
+});
+
 const heartbeatInterval = setInterval(() => {
     wss.clients.forEach((wsClient) => {
         if (wsClient.isAlive === false) return wsClient.terminate();
@@ -440,4 +598,3 @@ const heartbeatInterval = setInterval(() => {
 wss.on('close', () => { clearInterval(heartbeatInterval); });
 
 server.listen(port, () => { console.log(`Server running on port ${port}`); });
-

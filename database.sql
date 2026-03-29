@@ -99,3 +99,28 @@ CREATE TABLE IF NOT EXISTS collaborators (
     UNIQUE KEY collab_unique (user_id, resource_type, resource_id)
 );
 
+-- TABEL BARU: Untuk Fitur Comments (Diskusi Kolaboratif)
+CREATE TABLE IF NOT EXISTS comments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    request_id INT NOT NULL,
+    user_id INT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- TABEL BARU: Untuk Fitur API Monitors (Scheduled Runs)
+CREATE TABLE IF NOT EXISTS monitors (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    workspace_id INT NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    folder_id INT NULL,
+    schedule_cron VARCHAR(100) NOT NULL, -- Contoh: "0 * * * *" (Setiap jam)
+    is_active BOOLEAN DEFAULT TRUE,
+    last_run_at TIMESTAMP NULL,
+    last_run_status VARCHAR(50) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+    FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
+);

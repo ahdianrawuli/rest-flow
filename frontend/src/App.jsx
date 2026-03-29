@@ -8,7 +8,6 @@ import Mocks from './pages/Mocks';
 import Scenarios from './pages/Scenarios';
 import Header from './components/Header';
 import ActivityBar from './components/ActivityBar';
-import Footer from './components/Footer';
 
 function RequireAuth({ children }) {
     const token = localStorage.getItem('rf_token');
@@ -50,17 +49,16 @@ export default function App() {
 }
 
 function MainLayout({ theme, toggleTheme, activeWorkspaceId, setActiveWorkspaceId }) {
-    const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [sidebarOpen, setSidebarOpen] = useState(false); // Untuk Mobile
+    const [desktopCollapsed, setDesktopCollapsed] = useState(true); // Untuk Desktop (Default: Ringkas)
 
     return (
-        <div id="app" className="fixed inset-0 w-full h-full overflow-hidden flex flex-col bg-gray-50 dark:bg-slate-900">
+        <div id="app" className="fixed inset-0 w-full h-full overflow-hidden flex flex-col bg-gray-50 dark:bg-slate-900 text-sm">
             
-            {/* HEADER MELAYANG (Absolute) */}
+            {/* HEADER MELAYANG (Absolute) - Ketinggian diperkecil jadi h-12 */}
             <div className="absolute top-0 left-0 right-0 z-50">
                 <Header
                     toggleTheme={toggleTheme}
-                    activeWorkspaceId={activeWorkspaceId}
-                    setActiveWorkspaceId={setActiveWorkspaceId}
                     toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
                 />
             </div>
@@ -68,26 +66,33 @@ function MainLayout({ theme, toggleTheme, activeWorkspaceId, setActiveWorkspaceI
             {/* BODY / MAIN LAYOUT */}
             <div className="flex-1 flex flex-row relative z-0 h-full w-full overflow-hidden">
                 
-                {/* ACTIVITY BAR */}
-                <div className="mt-14 h-[calc(100%-3.5rem)] flex shrink-0 z-40 relative">
-                    <ActivityBar sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} />
+                {/* ACTIVITY BAR - Ketinggian menyesuaikan header (mt-12) */}
+                <div className="mt-12 h-[calc(100%-3rem)] flex shrink-0 z-40 relative">
+                    <ActivityBar 
+                        sidebarOpen={sidebarOpen} 
+                        setSidebarOpen={setSidebarOpen} 
+                        desktopCollapsed={desktopCollapsed}
+                        setDesktopCollapsed={setDesktopCollapsed}
+                        activeWorkspaceId={activeWorkspaceId}
+                        setActiveWorkspaceId={setActiveWorkspaceId}
+                    />
                 </div>
 
                 {/* Overlay for mobile sidebar */}
                 {sidebarOpen && (
                     <div
-                        className="fixed inset-0 bg-black/50 z-30 md:hidden mt-14"
+                        className="fixed inset-0 bg-black/50 z-30 md:hidden mt-12"
                         onClick={() => setSidebarOpen(false)}
                     ></div>
                 )}
 
                 {/* KONTEN UTAMA */}
-                <div className="flex-1 w-full h-full overflow-y-auto overflow-x-hidden relative flex flex-col">
+                <div className="flex-1 w-full h-full overflow-y-auto overflow-x-hidden relative flex flex-col bg-white dark:bg-slate-850">
                     
-                    {/* Spacer Setinggi Header (56px) - Mencegah konten awal tertutup header */}
-                    <div className="h-14 w-full shrink-0 block pointer-events-none"></div>
+                    {/* Spacer Setinggi Header (48px / h-12) */}
+                    <div className="h-12 w-full shrink-0 block pointer-events-none"></div>
 
-                    {/* PERBAIKAN: Padding dihapus total agar konten (seperti sidebar) membentang full screen ke ujung bawah dan samping layar */}
+                    {/* Pembungkus Routing */}
                     <div className="flex-1 w-full flex flex-col relative min-h-0">
                         <Routes>
                             <Route path="/" element={<Navigate to="/dashboard" />} />
@@ -98,13 +103,6 @@ function MainLayout({ theme, toggleTheme, activeWorkspaceId, setActiveWorkspaceI
                             <Route path="/scenarios" element={<Scenarios activeWorkspaceId={activeWorkspaceId} />} />
                         </Routes>
                     </div>
-                </div>
-            </div>
-
-            {/* FOOTER MELAYANG (Absolute) */}
-            <div className="absolute bottom-0 left-0 right-0 z-50 pointer-events-none">
-                <div className="pointer-events-auto">
-                    <Footer />
                 </div>
             </div>
         </div>

@@ -10,6 +10,10 @@ export default function Scenarios({ activeWorkspaceId }) {
 
     const [sidebarOpen, setSidebarOpen] = useState(false);
     
+    const [isLeftPanelExpanded, setIsLeftPanelExpanded] = useState(true);
+    const [showScenariosAccordion, setShowScenariosAccordion] = useState(true);
+    const [showLibraryAccordion, setShowLibraryAccordion] = useState(true);
+    
     const [currentScenario, setCurrentScenario] = useState({ 
         id: null, name: 'New Scenario', testType: 'api_flow', 
         perfConfig: { vus: 10, spawnRate: 2, duration: 15 }, 
@@ -23,13 +27,11 @@ export default function Scenarios({ activeWorkspaceId }) {
     
     const [expandedLibraryFolders, setExpandedLibraryFolders] = useState({});
 
-    // Running States
     const [isRunning, setIsRunning] = useState(false);
     const abortRef = useRef(false);
     const perfLogsRef = useRef([]);
     const perfNodesRef = useRef({});
 
-    // Modal & Report States
     const [showNewModal, setShowNewModal] = useState(false);
     const [newScenarioName, setNewScenarioName] = useState('New Scenario');
     const [newScenarioType, setNewScenarioType] = useState('api_flow');
@@ -37,7 +39,6 @@ export default function Scenarios({ activeWorkspaceId }) {
     const [perfReport, setPerfReport] = useState(null);
     const [apiFlowReport, setApiFlowReport] = useState(null);
     
-    // Expandable states for reports
     const [expandedPerfNode, setExpandedPerfNode] = useState(null);
     const [expandedPerfDetail, setExpandedPerfDetail] = useState(null);
     const [expandedFlowItem, setExpandedFlowItem] = useState(null);
@@ -295,10 +296,16 @@ export default function Scenarios({ activeWorkspaceId }) {
             path.setAttribute('fill', 'none'); 
             path.classList.add('flow-line');
 
+            // PERBAIKAN: pointer-events-auto dipasang agar klik berhasil masuk
             const clickPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             clickPath.setAttribute('d', `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`);
-            clickPath.setAttribute('stroke', 'transparent'); clickPath.setAttribute('stroke-width', '25'); clickPath.setAttribute('fill', 'none'); clickPath.classList.add('edge-delete', 'cursor-pointer');
-            clickPath.addEventListener('click', () => removeEdgeTrigger(edge.id));
+            clickPath.setAttribute('stroke', 'transparent'); clickPath.setAttribute('stroke-width', '25'); clickPath.setAttribute('fill', 'none'); 
+            clickPath.classList.add('edge-delete', 'cursor-pointer', 'pointer-events-auto');
+            
+            clickPath.addEventListener('click', (e) => {
+                e.stopPropagation(); // Mencegah klik menyebar ke canvas di belakang
+                removeEdgeTrigger(edge.id);
+            });
 
             svg.appendChild(path); svg.appendChild(clickPath);
         });
@@ -443,7 +450,7 @@ export default function Scenarios({ activeWorkspaceId }) {
     };
 
     // =====================================
-    // RUNNER: API FLOW TEST (DENGAN ASSERTION BARU)
+    // RUNNER: API FLOW TEST
     // =====================================
     const runApiFlowTest = async () => {
         if (currentScenario.nodes.length === 0) return showAlert('No nodes to run', 'warning');
@@ -600,7 +607,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                                 }
                             }
 
-                            // --- PEMBARUAN LOGIKA ASSERTION ---
                             let assertions = [];
                             try { assertions = typeof reqData.assertions === 'string' ? JSON.parse(reqData.assertions) : (reqData.assertions || []); } catch(e) {}
                             if (assertions && assertions.length > 0) {
@@ -610,13 +616,13 @@ export default function Scenarios({ activeWorkspaceId }) {
                                     try {
                                         let targetValue = '';
                                         
-                                        // 1. Ekstraksi Target Value berdasarkan tipe assertion
+                                        // 1. Ekstraksi Target Value
                                         if (a.type === 'status') targetValue = responseStatus.toString();
                                         else if (a.type === 'time') targetValue = parseInt(responseTime);
                                         else if (a.type === 'body' || a.type === 'body_contains') targetValue = responseBodyStr;
                                         else if (a.type === 'header') targetValue = JSON.stringify(response.headers || {});
                                         
-                                        // 2. Evaluasi berdasarkan operator
+                                        // 2. Evaluasi
                                         if (a.type === 'time') {
                                             const expectVal = parseInt(a.value);
                                             if (a.operator === 'equals') passed = targetValue === expectVal;
@@ -634,7 +640,7 @@ export default function Scenarios({ activeWorkspaceId }) {
                                         }
                                     } catch(e) { passed = false; }
                                     
-                                    return !passed; // Kembalikan true jika GAGAL (karena kita pakai `.some()`)
+                                    return !passed; 
                                 });
                                 if (hasFailures) throw new Error(`Assertion failed on iter ${iter}`);
                             }
@@ -904,7 +910,7 @@ export default function Scenarios({ activeWorkspaceId }) {
     };
 
     const handleRunClick = () => {
-        setConnectState(null); // RESET STATE GARIS SAAT RUN TEST DIKLIK
+        setConnectState(null); 
         if (currentScenario.testType === 'performance') runPerformanceTest();
         else runApiFlowTest();
     };
@@ -949,62 +955,198 @@ export default function Scenarios({ activeWorkspaceId }) {
                 }
             `}} />
             
-            {/* Sidebar Library - PERBAIKAN 6: dark:bg-slate-800 agar solid */}
-            <aside className={`w-64 bg-gray-50 dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700 flex flex-col shrink-0 z-30 absolute md:relative h-full transition-transform duration-300 ${sidebarOpen ? 'translate-x-0 shadow-2xl md:shadow-none' : '-translate-x-full md:translate-x-0'}`}>
-                <div className="p-3 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center bg-white dark:bg-slate-800">
-                    <h3 className="font-semibold text-sm text-gray-700 dark:text-gray-300"><i className="fa-solid fa-flask mr-2"></i>Test Scenarios</h3>
-                    <button onClick={initiateNewScenario} className="p-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded hover:bg-blue-200 dark:hover:bg-blue-800/50 transition-colors" title="New Scenario"><i className="fa-solid fa-plus text-sm"></i></button>
-                </div>
-                <div className="flex-grow overflow-y-auto scroll-custom p-2 pb-12 space-y-1">
-                    {scenarios.length === 0 && <div className="text-center p-4 text-sm text-gray-500">No test scenarios</div>}
-                    {scenarios.map(s => {
-                        let isPerf = false;
-                        try { const d = JSON.parse(s.nodes); if (d.type === 'performance') isPerf = true; } catch(e){}
-                        return (
-                            <div key={s.id} onClick={() => handleLoadScenario(s)} className={`p-2 rounded hover:bg-gray-200 dark:hover:bg-slate-700 cursor-pointer transition-colors group relative border-l-2 border-transparent ${currentScenario.id === s.id ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500' : ''}`}>
-                                <div className="font-medium text-sm text-gray-800 dark:text-gray-200 truncate">{s.name}</div>
-                                <div className="text-[10px] text-gray-500 mt-0.5">{isPerf ? 'Performance Test' : 'API Flow Test'}</div>
+            {/* SIDEBAR KIRI UTAMA (Unified: Judul, Scenarios, Library) */}
+            <aside className={`bg-gray-50 dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700 flex flex-col shrink-0 z-30 absolute md:relative h-full transition-all duration-300 shadow-2xl md:shadow-none ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} ${isLeftPanelExpanded ? 'w-[320px]' : 'w-0 md:w-14'}`}>
+                
+                {/* Tombol Collapse/Expand Mengambang di Tepi Kanan Sidebar */}
+                <button 
+                    onClick={() => setIsLeftPanelExpanded(!isLeftPanelExpanded)} 
+                    className="hidden md:flex absolute -right-3.5 top-6 z-50 w-7 h-7 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-full items-center justify-center shadow-md cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors text-gray-500 dark:text-gray-400"
+                    title={isLeftPanelExpanded ? "Collapse Panel" : "Expand Panel"}
+                >
+                    <i className={`fa-solid fa-chevron-${isLeftPanelExpanded ? 'left' : 'right'} text-[10px]`}></i>
+                </button>
+
+                {/* Konten Sidebar ketika Expanded */}
+                {isLeftPanelExpanded && (
+                    <div className="flex flex-col h-full w-[320px] overflow-hidden opacity-100 transition-opacity duration-300">
+                        
+                        {/* 1. Header: Judul Scenario & Badge (Sesuai Permintaan) */}
+                        <div className="p-4 border-b border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 shrink-0">
+                            <div className="text-[10px] font-extrabold text-gray-400 uppercase tracking-wider mb-1">Current Scenario</div>
+                            <input 
+                                type="text" 
+                                value={currentScenario.name} 
+                                onChange={e => setCurrentScenario(p => ({...p, name: e.target.value}))} 
+                                className="bg-transparent font-bold text-lg outline-none w-full text-gray-900 dark:text-white mb-2 placeholder-gray-300 dark:placeholder-gray-600" 
+                                placeholder="Scenario Name" 
+                            />
+                            <div className="flex items-center justify-between">
+                                <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap inline-block ${currentScenario.testType === 'performance' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'}`}>
+                                    {currentScenario.testType === 'performance' ? 'Performance Test' : 'API Flow Test'}
+                                </span>
                             </div>
-                        )
-                    })}
-                </div>
+                        </div>
+
+                        {/* Container Accordions untuk Scenarios dan Library (Membagi sisa ruang vertikal) */}
+                        <div className="flex flex-col flex-1 overflow-hidden bg-gray-50 dark:bg-slate-900/50">
+                            
+                            {/* Accordion 1: Test Scenarios */}
+                            <div className={`flex flex-col border-b border-gray-200 dark:border-slate-700 ${showScenariosAccordion ? 'flex-1' : 'shrink-0'} overflow-hidden transition-all duration-300`}>
+                                <div 
+                                    onClick={() => setShowScenariosAccordion(!showScenariosAccordion)} 
+                                    className="h-10 px-4 flex items-center justify-between cursor-pointer bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 shrink-0 transition-colors"
+                                >
+                                    <span className="font-bold text-xs text-gray-700 dark:text-gray-300 uppercase tracking-wider"><i className="fa-solid fa-flask mr-2 text-blue-500"></i> Saved Scenarios</span>
+                                    <i className={`fa-solid fa-chevron-${showScenariosAccordion ? 'down' : 'right'} text-[10px] text-gray-500`}></i>
+                                </div>
+                                {showScenariosAccordion && (
+                                    <div className="flex-1 overflow-y-auto scroll-custom p-2 bg-white dark:bg-slate-800/50">
+                                        <button onClick={(e) => { e.stopPropagation(); initiateNewScenario(); }} className="w-full py-1.5 mb-2 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors text-xs font-bold flex items-center justify-center gap-2 border border-blue-100 dark:border-blue-800/30 shadow-sm">
+                                            <i className="fa-solid fa-plus"></i> New Scenario
+                                        </button>
+                                        <div className="space-y-1">
+                                            {scenarios.length === 0 && <div className="text-center p-4 text-xs text-gray-500">No test scenarios</div>}
+                                            {scenarios.map(s => {
+                                                let isPerf = false;
+                                                try { const d = JSON.parse(s.nodes); if (d.type === 'performance') isPerf = true; } catch(e){}
+                                                return (
+                                                    <div key={s.id} onClick={() => handleLoadScenario(s)} className={`p-2 rounded hover:bg-gray-100 dark:hover:bg-slate-700 cursor-pointer transition-colors group relative border-l-2 border-transparent ${currentScenario.id === s.id ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500' : ''}`}>
+                                                        <div className="font-medium text-xs text-gray-800 dark:text-gray-200 truncate">{s.name}</div>
+                                                        <div className="text-[9px] text-gray-500 mt-0.5 uppercase font-semibold">{isPerf ? 'Performance' : 'API Flow'}</div>
+                                                    </div>
+                                                )
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Accordion 2: Library */}
+                            <div className={`flex flex-col ${showLibraryAccordion ? 'flex-1' : 'shrink-0'} overflow-hidden transition-all duration-300`}>
+                                <div 
+                                    onClick={() => setShowLibraryAccordion(!showLibraryAccordion)} 
+                                    className="h-10 px-4 flex items-center justify-between cursor-pointer bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 shrink-0 border-b border-gray-200 dark:border-slate-700 transition-colors"
+                                >
+                                    <span className="font-bold text-xs text-gray-700 dark:text-gray-300 uppercase tracking-wider"><i className="fa-solid fa-book-bookmark mr-2 text-indigo-500"></i> Library</span>
+                                    <i className={`fa-solid fa-chevron-${showLibraryAccordion ? 'down' : 'right'} text-[10px] text-gray-500`}></i>
+                                </div>
+                                {showLibraryAccordion && (
+                                    <div className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-slate-800/50">
+                                        <div className="px-2 pt-2 pb-1 shrink-0">
+                                            <div className="relative">
+                                                <i className="fa-solid fa-search absolute left-2.5 top-2 text-gray-400 text-[10px]"></i>
+                                                <input type="text" value={librarySearch} onChange={e => setLibrarySearch(e.target.value)} placeholder="Search API..." className="w-full pl-7 pr-2 py-1.5 text-xs bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-md outline-none focus:border-blue-500" />
+                                            </div>
+                                        </div>
+                                        <div className="flex-1 overflow-y-auto scroll-custom p-2 space-y-1">
+                                            {filteredReqs.length > 0 && <div className="text-[9px] font-extrabold text-gray-500 mt-1 mb-1 px-1 uppercase tracking-wider">Requests</div>}
+                                            {folders.map(f => {
+                                                const fReqs = filteredReqs.filter(r => r.folder_id === f.id);
+                                                if (q !== '' && fReqs.length === 0 && !(f.name||'').toLowerCase().includes(q)) return null;
+                                                const isExpanded = expandedLibraryFolders[f.id] !== false;
+
+                                                return (
+                                                    <div key={f.id} className="mb-2">
+                                                        <div onClick={() => setExpandedLibraryFolders(p => ({...p, [f.id]: !isExpanded}))} className="cursor-pointer flex items-center gap-1.5 px-1.5 py-1 text-xs font-semibold text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded transition-colors group">
+                                                            <i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} w-3 text-center text-[10px] text-gray-500`}></i>
+                                                            <i className="fa-solid fa-folder text-blue-500"></i>
+                                                            <span className="truncate">{f.name}</span>
+                                                        </div>
+                                                        {isExpanded && (
+                                                            <div className="pl-5 pr-1 mt-1 space-y-1">
+                                                                {fReqs.map(r => (
+                                                                    <div key={r.id} onClick={() => handleAddNode('request', r, f.name)} className="p-1.5 rounded border border-gray-100 dark:border-slate-700 hover:border-blue-200 hover:bg-blue-50 dark:hover:bg-slate-600 dark:hover:border-slate-500 cursor-pointer text-xs flex items-center justify-between group transition-colors shadow-sm bg-white dark:bg-slate-800">
+                                                                        <div className="flex items-center gap-2 truncate"><span className={`font-bold method-${r.method} text-[9px]`}>{r.method}</span> <span className="truncate text-gray-700 dark:text-gray-300">{r.name}</span></div>
+                                                                        <button className="opacity-0 group-hover:opacity-100 text-blue-600 hover:text-blue-400"><i className="fa-solid fa-plus"></i></button>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                            {filteredReqs.filter(r => !r.folder_id).map(r => (
+                                                <div key={r.id} onClick={() => handleAddNode('request', r)} className="p-1.5 rounded border border-gray-100 dark:border-slate-700 hover:border-blue-200 hover:bg-blue-50 dark:hover:bg-slate-600 dark:hover:border-slate-500 cursor-pointer text-xs mb-1 flex items-center justify-between group transition-colors shadow-sm bg-white dark:bg-slate-800">
+                                                    <div className="flex items-center gap-2 truncate"><span className={`font-bold method-${r.method} text-[9px]`}>{r.method}</span> <span className="truncate text-gray-700 dark:text-gray-300">{r.name}</span></div>
+                                                    <button className="opacity-0 group-hover:opacity-100 text-blue-600 hover:text-blue-400"><i className="fa-solid fa-plus"></i></button>
+                                                </div>
+                                            ))}
+
+                                            {filteredMocks.length > 0 && <div className="text-[9px] font-extrabold text-gray-500 mt-4 mb-1 px-1 uppercase tracking-wider">Mocks</div>}
+                                            {filteredMocks.map(m => (
+                                                <div key={m.id} onClick={() => handleAddNode('mock', m)} className="p-1.5 rounded border border-gray-100 dark:border-slate-700 hover:border-orange-200 hover:bg-orange-50 dark:hover:bg-slate-600 dark:hover:border-slate-500 cursor-pointer text-xs mb-1 flex items-center justify-between group transition-colors shadow-sm bg-white dark:bg-slate-800">
+                                                    <div className="flex items-center gap-2 truncate"><span className={`font-bold method-${m.method} text-[9px]`}>{m.method}</span> <span className="truncate text-gray-700 dark:text-gray-300">{m.name}</span></div>
+                                                    <button className="opacity-0 group-hover:opacity-100 text-orange-600 hover:text-orange-400"><i className="fa-solid fa-plus"></i></button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                        </div>
+                    </div>
+                )}
+
+                {/* Konten Sidebar ketika Collapsed (Hanya Icon Cepat) */}
+                {!isLeftPanelExpanded && (
+                    <div className="hidden md:flex flex-col items-center pt-6 space-y-6 w-14 opacity-100 transition-opacity duration-300">
+                        <div title="Saved Scenarios" className="cursor-pointer p-2 rounded-lg text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-slate-700 transition-colors" onClick={() => {setIsLeftPanelExpanded(true); setShowScenariosAccordion(true); setShowLibraryAccordion(false);}}>
+                            <i className="fa-solid fa-flask text-lg"></i>
+                        </div>
+                        <div title="Library" className="cursor-pointer p-2 rounded-lg text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 dark:hover:bg-slate-700 transition-colors" onClick={() => {setIsLeftPanelExpanded(true); setShowLibraryAccordion(true); setShowScenariosAccordion(false);}}>
+                            <i className="fa-solid fa-book-bookmark text-lg"></i>
+                        </div>
+                    </div>
+                )}
             </aside>
 
             {sidebarOpen && <div className="fixed inset-0 bg-black/50 z-20 md:hidden" onClick={() => setSidebarOpen(false)}></div>}
 
+            {/* AREA UTAMA (KANVAS & TOMBOL) */}
             <main className="flex-grow flex flex-col bg-white dark:bg-slate-900 min-w-0 h-full overflow-hidden relative">
-                <div className="p-4 border-b border-gray-200 dark:border-slate-700 md:hidden flex items-center shrink-0">
-                    <button onClick={() => setSidebarOpen(true)} className="p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-700 rounded transition-colors mr-2"><i className="fa-solid fa-bars"></i></button>
-                    <span className="font-semibold text-sm">Scenarios Sidebar</span>
-                </div>
-
-                <div className="p-4 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center bg-gray-50 dark:bg-slate-800 shrink-0">
-                    <div className="flex items-center gap-3 w-1/2">
-                        <input type="text" value={currentScenario.name} onChange={e => setCurrentScenario(p => ({...p, name: e.target.value}))} className="bg-transparent font-bold text-lg outline-none w-full max-w-[250px]" placeholder="Scenario Name" />
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${currentScenario.testType === 'performance' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'}`}>
-                            {currentScenario.testType === 'performance' ? 'Performance Test' : 'API Flow'}
-                        </span>
+                
+                {/* Header Atas Kanvas (Hanya Action Buttons & Hamburger Mobile) */}
+                <div className="h-14 md:h-16 px-4 border-b border-gray-200 dark:border-slate-700 flex items-center justify-between bg-white dark:bg-slate-800 shrink-0 z-20 shadow-sm">
+                    <div className="flex items-center gap-3">
+                        {/* Hamburger untuk Mobile */}
+                        <button onClick={() => setSidebarOpen(true)} className="md:hidden p-1.5 text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-700 rounded transition-colors"><i className="fa-solid fa-bars"></i></button>
+                        
+                        {/* Judul Muncul di Header Kanvas JIKA Sidebar Ditutup (Agar pengguna tetap tahu sedang buka skenario apa) */}
+                        <div className={`transition-opacity duration-300 ${!isLeftPanelExpanded ? 'opacity-100 flex items-center gap-3' : 'opacity-0 hidden md:flex pointer-events-none'}`}>
+                            <span className="font-bold text-gray-800 dark:text-gray-200 text-lg hidden md:block">{currentScenario.name}</span>
+                            <span className="text-[10px] bg-gray-100 dark:bg-slate-700 px-2 py-0.5 rounded-full text-gray-600 dark:text-gray-300 font-bold hidden md:block">{currentScenario.testType === 'performance' ? 'Performance' : 'API Flow'}</span>
+                        </div>
                     </div>
                     
+                    {/* Action Buttons (Save, Run, Delete) */}
                     <div className="flex gap-2">
-                        <button onClick={handleSave} disabled={isRunning} className="px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors flex items-center gap-2 disabled:opacity-50"><i className="fa-solid fa-save"></i> <span className="hidden md:inline">Save</span></button>
+                        <button onClick={handleSave} disabled={isRunning} className="px-4 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50">
+                            <i className="fa-solid fa-save"></i> <span className="hidden sm:inline">Save</span>
+                        </button>
                         
                         {!isRunning ? (
-                            <button onClick={handleRunClick} className="px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded transition-colors flex items-center gap-2">
-                                <i className="fa-solid fa-play"></i> <span className="hidden md:inline">Run Test</span>
+                            <button onClick={handleRunClick} className="px-4 py-1.5 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors flex items-center gap-2 shadow-sm">
+                                <i className="fa-solid fa-play"></i> <span className="hidden sm:inline">Run Test</span>
                             </button>
                         ) : (
-                            <button onClick={handleStopTest} className="px-4 py-2 text-sm font-medium bg-red-600 hover:bg-red-700 text-white rounded transition-colors flex items-center gap-2">
-                                <i className="fa-solid fa-circle-notch fa-spin"></i> <span className="hidden md:inline">Stop Test</span>
+                            <button onClick={handleStopTest} className="px-4 py-1.5 text-sm font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors flex items-center gap-2 shadow-sm">
+                                <i className="fa-solid fa-circle-notch fa-spin"></i> <span className="hidden sm:inline">Stop</span>
                             </button>
                         )}
                         
-                        {currentScenario.id && <button onClick={handleDeleteTrigger} disabled={isRunning} className="px-3 py-2 text-sm font-medium bg-red-100 hover:bg-red-200 text-red-600 rounded transition-colors disabled:opacity-50"><i className="fa-solid fa-trash"></i></button>}
+                        {currentScenario.id && (
+                            <button onClick={handleDeleteTrigger} disabled={isRunning} className="px-3 py-1.5 text-sm font-medium bg-red-50 hover:bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800/50 rounded-lg transition-colors disabled:opacity-50">
+                                <i className="fa-solid fa-trash"></i>
+                            </button>
+                        )}
                     </div>
                 </div>
 
+                {/* Sub-Header: Konfigurasi Performance Test (Jika tipe Performance) */}
                 {currentScenario.testType === 'performance' && (
-                    <div className="px-4 py-3 bg-purple-50 dark:bg-purple-900/10 border-b border-gray-200 dark:border-slate-700 shrink-0 flex gap-6 items-center overflow-x-auto scroll-custom">
+                    <div className="px-4 py-2.5 bg-purple-50/80 dark:bg-purple-900/20 border-b border-gray-200 dark:border-slate-700 shrink-0 flex gap-6 items-center overflow-x-auto scroll-custom z-10 shadow-inner">
                         <div className="flex items-center gap-2">
                             <label className="text-xs font-bold text-gray-600 dark:text-gray-400 whitespace-nowrap">Concurrent VUs:</label>
                             <input type="number" min="1" max="1000" value={currentScenario.perfConfig.vus} onChange={e => handleConfigChange('vus', e.target.value === '' ? '' : parseInt(e.target.value))} className="w-20 px-2 py-1 text-sm bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded outline-none focus:ring-1 focus:ring-purple-500" />
@@ -1020,162 +1162,118 @@ export default function Scenarios({ activeWorkspaceId }) {
                     </div>
                 )}
 
-                <div className="flex-grow flex overflow-hidden">
-                    {/* Inner Sidebar Library */}
-                    <div className="w-1/3 max-w-[300px] border-r border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800/30 flex flex-col">
-                        <div className="p-3 border-b border-gray-200 dark:border-slate-700 font-semibold text-sm">Library</div>
-                        <div className="p-2 border-b border-gray-200 dark:border-slate-700"><input type="text" value={librarySearch} onChange={e => setLibrarySearch(e.target.value)} placeholder="Search..." className="w-full px-2 py-1 text-xs bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-600 rounded" /></div>
-                        
-                        <div className="flex-grow overflow-y-auto scroll-custom p-2 pb-12 space-y-1">
-                            {filteredReqs.length > 0 && <div className="text-xs font-bold text-gray-500 mt-2 mb-1 px-1 uppercase tracking-wider">Requests</div>}
-                            
-                            {folders.map(f => {
-                                const fReqs = filteredReqs.filter(r => r.folder_id === f.id);
-                                if (q !== '' && fReqs.length === 0 && !(f.name||'').toLowerCase().includes(q)) return null;
-                                const isExpanded = expandedLibraryFolders[f.id] !== false;
+                {/* KANVAS NODE VISUAL */}
+                <div className="flex-grow relative bg-[#f8fafc] dark:bg-[#0f172a] overflow-hidden bg-dot-pattern">
+                    <style dangerouslySetInnerHTML={{__html: `
+                        .bg-dot-pattern {
+                            background-image: radial-gradient(rgba(148, 163, 184, 0.3) 1px, transparent 1px);
+                            background-size: 20px 20px;
+                        }
+                        .dark .bg-dot-pattern {
+                            background-image: radial-gradient(rgba(71, 85, 105, 0.3) 1px, transparent 1px);
+                        }
+                    `}} />
 
-                                return (
-                                    <div key={f.id} className="mb-2">
-                                        <div onClick={() => setExpandedLibraryFolders(p => ({...p, [f.id]: !isExpanded}))} className="cursor-pointer flex items-center gap-1.5 px-1.5 py-1 text-xs font-semibold text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-slate-700 rounded transition-colors group">
-                                            <i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} w-3 text-center text-[10px] text-gray-500`}></i>
-                                            <i className="fa-solid fa-folder text-blue-500"></i>
-                                            <span className="truncate">{f.name}</span>
+                    <div className="absolute top-4 right-4 z-40 flex flex-col gap-2 bg-white dark:bg-slate-800 shadow-md rounded-lg border border-gray-200 dark:border-slate-700 p-1">
+                        <button onClick={() => setZoom(z => Math.min(z + 0.1, 2))} className="w-8 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-100 dark:hover:bg-slate-700 rounded"><i className="fa-solid fa-plus"></i></button>
+                        <div className="w-full h-px bg-gray-200 dark:bg-slate-700"></div>
+                        <button onClick={() => setZoom(1)} className="w-8 h-8 flex items-center justify-center text-[10px] font-bold text-gray-600 hover:bg-gray-100 dark:hover:bg-slate-700 rounded">{Math.round(zoom * 100)}%</button>
+                        <div className="w-full h-px bg-gray-200 dark:bg-slate-700"></div>
+                        <button onClick={() => setZoom(z => Math.max(z - 0.1, 0.3))} className="w-8 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-100 dark:hover:bg-slate-700 rounded"><i className="fa-solid fa-minus"></i></button>
+                    </div>
+
+                    <div ref={containerRef} onScroll={drawLines} className="absolute inset-0 w-full h-full overflow-y-auto scroll-custom z-10">
+                        <div ref={scaledContainerRef} onClick={() => setConnectState(null)} style={{ width: Math.max(maxX, containerRef.current?.clientWidth || 0), height: Math.max(maxY, containerRef.current?.clientHeight || 0), transform: `scale(${zoom})`, transformOrigin: 'top left' }} className="relative min-w-full min-h-full">
+                            <svg ref={svgRef} className="absolute inset-0 w-full h-full pointer-events-none z-0 overflow-visible"></svg>
+
+                            {currentScenario.nodes.map((node) => (
+                                <div key={node.id} id={`canvas-node-${node.id}`} className="w-64 bg-white dark:bg-slate-800 rounded-xl shadow-lg border border-gray-200 dark:border-slate-700 p-3 absolute z-10 flex flex-col transition-colors" style={{ left: node.x, top: node.y }}>
+                                {['top', 'right', 'bottom', 'left'].map(pos => {
+                                    const isConnected = currentScenario.edges.some(e => 
+                                        (e.source === node.id && e.sourceHandle === pos) || 
+                                        (e.target === node.id && e.targetHandle === pos)
+                                    );
+
+                                    const isSource = connectState && connectState.nodeId === node.id && connectState.handleId === pos;
+                                    const isValidTarget = connectState && connectState.nodeId !== node.id;
+                                    
+                                    const posStyle = pos === 'top' ? { top: -6, left: '50%', transform: 'translateX(-50%)' } 
+                                        : pos === 'bottom' ? { bottom: -6, left: '50%', transform: 'translateX(-50%)' } 
+                                        : pos === 'right' ? { right: -6, top: '50%', transform: 'translateY(-50%)' } 
+                                        : { left: -6, top: '50%', transform: 'translateY(-50%)' };
+
+                                    let handleClass = "node-handle absolute w-3.5 h-3.5 rounded-full transition-all duration-200 z-20 ";
+                                    
+                                    if (isConnected) {
+                                        handleClass += "opacity-0 pointer-events-none";
+                                    } else {
+                                        handleClass += "bg-white dark:bg-slate-200 border-2 border-gray-400 dark:border-slate-500 cursor-crosshair hover:scale-125 ";
+                                        if (isSource) {
+                                            handleClass += "handle-source-active";
+                                        } else if (isValidTarget) {
+                                            handleClass += "handle-target-valid hover:bg-emerald-600 hover:border-emerald-800";
+                                        } else {
+                                            handleClass += "hover:bg-blue-500 hover:border-blue-700";
+                                        }
+                                    }
+
+                                    return <div key={pos} onClick={(e) => handleHandleClick(e, node.id, pos)} className={handleClass} style={posStyle} data-node={node.id} data-handle={pos}></div>;
+                                })}
+
+                                <div data-id={node.id} onPointerDown={(e) => startDrag(e, node)} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} className="flex justify-between items-start mb-2 border-b border-gray-100 dark:border-slate-700 pb-2 cursor-grab active:cursor-grabbing node-header" style={{ touchAction: 'none' }}>
+                                    <div className="flex flex-col truncate pr-2 pointer-events-none">
+                                        <div className="flex items-center gap-2 truncate">
+                                            <div className={`w-6 h-6 shrink-0 rounded flex items-center justify-center text-xs ${node.type === 'mock' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'}`}><i className={`fa-solid ${node.type === 'mock' ? 'fa-server' : 'fa-paper-plane'}`}></i></div>
+                                            <span className="font-bold text-sm truncate">{node.name}</span>
                                         </div>
-                                        {isExpanded && (
-                                            <div className="pl-5 pr-1 mt-1 space-y-1">
-                                                {fReqs.map(r => (
-                                                    <div key={r.id} onClick={() => handleAddNode('request', r, f.name)} className="p-1.5 rounded border border-transparent hover:border-blue-200 hover:bg-blue-50 dark:hover:bg-slate-700 dark:hover:border-slate-600 cursor-pointer text-xs flex items-center justify-between group transition-colors">
-                                                        <div className="flex items-center gap-2 truncate"><span className={`font-bold method-${r.method}`}>{r.method}</span> <span className="truncate">{r.name}</span></div>
-                                                        <button className="opacity-0 group-hover:opacity-100 text-blue-600 hover:text-blue-800"><i className="fa-solid fa-plus"></i></button>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
                                     </div>
-                                );
-                            })}
-                            {filteredReqs.filter(r => !r.folder_id).map(r => (
-                                <div key={r.id} onClick={() => handleAddNode('request', r)} className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-slate-700 cursor-pointer text-xs mb-1 flex items-center justify-between group">
-                                    <div className="flex items-center gap-2 truncate"><span className={`font-bold method-${r.method}`}>{r.method}</span> <span className="truncate">{r.name}</span></div>
-                                    <button className="opacity-0 group-hover:opacity-100 text-blue-600 hover:text-blue-800"><i className="fa-solid fa-plus"></i></button>
+                                    <div className="flex gap-1 shrink-0 mt-0.5 pointer-events-auto">
+                                        <button onClick={() => removeNode(node.id)} className="text-gray-400 hover:text-red-500 p-1"><i className="fa-solid fa-times text-xs"></i></button>
+                                    </div>
+                                </div>
+                                <div className="flex flex-col gap-2 text-xs text-gray-600 dark:text-gray-400 mb-1">
+                                    <div className="flex justify-between items-center"><span>Method:</span><span className={`font-bold method-${node.method}`}>{node.method}</span></div>
+                                    {currentScenario.testType === 'api_flow' && (
+                                        <>
+                                        <div className="flex justify-between items-center"><span>Iterations:</span><input type="number" min="1" max="100" value={node.iterations} onChange={e => handleNodeChange(node.id, 'iterations', e.target.value)} onBlur={e => handleNodeChange(node.id, 'iterations', parseInt(e.target.value)||1)} className="w-16 bg-gray-50 dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded px-1 py-0.5 outline-none text-center font-mono" /></div>
+                                        <div className="flex justify-between items-center"><span>Delay (ms):</span><input type="number" min="0" value={node.delay} onChange={e => handleNodeChange(node.id, 'delay', e.target.value)} onBlur={e => handleNodeChange(node.id, 'delay', parseInt(e.target.value)||0)} className="w-16 bg-gray-50 dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded px-1 py-0.5 outline-none text-center font-mono" /></div>
+                                        </>
+                                    )}
+                                </div>
+                                {node.runStatus && (
+                                    <div className="mt-2 pt-2 border-t border-gray-100 dark:border-slate-700 flex items-center justify-between">
+                                        <div className="flex items-center gap-1.5">
+                                            {node.runStatus.status === 'running' && <i className="fa-solid fa-circle-notch fa-spin text-sm text-blue-500"></i>}
+                                            {node.runStatus.status === 'passed' && <i className="fa-solid fa-check-circle text-sm text-green-500"></i>}
+                                            {node.runStatus.status === 'failed' && <i className="fa-solid fa-times-circle text-sm text-red-500"></i>}
+                                            {node.runStatus.status === 'waiting' && <i className="fa-regular fa-clock text-sm text-yellow-500"></i>}
+                                            <span className={`text-xs font-bold ${node.runStatus.status === 'passed' ? 'text-green-600' : node.runStatus.status === 'failed' ? 'text-red-600' : node.runStatus.status === 'waiting' ? 'text-yellow-600' : 'text-blue-600'}`}>{node.runStatus.text}</span>
+                                        </div>
+                                        <span className="text-[10px] text-gray-500 font-mono font-bold">{node.runStatus.prog}</span>
+                                    </div>
+                                )}
                                 </div>
                             ))}
-
-                            {filteredMocks.length > 0 && <div className="text-xs font-bold text-gray-500 mt-3 mb-1 px-1 uppercase tracking-wider">Mocks</div>}
-                            {filteredMocks.map(m => (
-                                <div key={m.id} onClick={() => handleAddNode('mock', m)} className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-slate-700 cursor-pointer text-xs mb-1 flex items-center justify-between group">
-                                    <div className="flex items-center gap-2 truncate"><span className={`font-bold method-${m.method}`}>{m.method}</span> <span className="truncate">{m.name}</span></div>
-                                    <button className="opacity-0 group-hover:opacity-100 text-orange-600 hover:text-orange-800"><i className="fa-solid fa-plus"></i></button>
+                            {currentScenario.nodes.length === 0 && (
+                                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center text-gray-500">
+                                    <i className="fa-solid fa-diagram-project text-4xl mb-3 opacity-50"></i><p>Add requests from the library to build your test scenario</p>
                                 </div>
-                            ))}
+                            )}
                         </div>
                     </div>
 
-                    <div className="flex-grow relative bg-[#f8fafc] dark:bg-[#0f172a] overflow-hidden">
-                        <div className="absolute top-4 right-4 z-40 flex flex-col gap-2 bg-white dark:bg-slate-800 shadow-md rounded-lg border border-gray-200 dark:border-slate-700 p-1">
-                            <button onClick={() => setZoom(z => Math.min(z + 0.1, 2))} className="w-8 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-100 dark:hover:bg-slate-700 rounded"><i className="fa-solid fa-plus"></i></button>
-                            <div className="w-full h-px bg-gray-200 dark:bg-slate-700"></div>
-                            <button onClick={() => setZoom(1)} className="w-8 h-8 flex items-center justify-center text-[10px] font-bold text-gray-600 hover:bg-gray-100 dark:hover:bg-slate-700 rounded">{Math.round(zoom * 100)}%</button>
-                            <div className="w-full h-px bg-gray-200 dark:bg-slate-700"></div>
-                            <button onClick={() => setZoom(z => Math.max(z - 0.1, 0.3))} className="w-8 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-100 dark:hover:bg-slate-700 rounded"><i className="fa-solid fa-minus"></i></button>
+                    {/* Logs Pane */}
+                    <div className={`absolute bottom-0 left-0 right-0 h-1/3 bg-white dark:bg-slate-800 border-t border-gray-200 dark:border-slate-700 shadow-[0_-5px_15px_-5px_rgba(0,0,0,0.1)] transform transition-transform duration-300 z-50 flex flex-col ${logsOpen ? 'translate-y-0' : 'translate-y-full'}`}>
+                        <div className="px-4 py-2 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center bg-gray-50 dark:bg-slate-800/80">
+                            <span className="font-semibold text-sm">Execution Logs {isRunning && <i className="fa-solid fa-circle-notch fa-spin ml-2 text-blue-500"></i>}</span>
+                            <button onClick={() => setLogsOpen(false)} className="text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"><i className="fa-solid fa-times"></i></button>
                         </div>
-
-                        {/* RESET STATE KETIKA KLIK AREA KOSONG KANVAS */}
-                        <div ref={containerRef} onScroll={drawLines} className="absolute inset-0 w-full h-full overflow-y-auto scroll-custom z-10">
-                            <div ref={scaledContainerRef} onClick={() => setConnectState(null)} style={{ width: Math.max(maxX, containerRef.current?.clientWidth || 0), height: Math.max(maxY, containerRef.current?.clientHeight || 0), transform: `scale(${zoom})`, transformOrigin: 'top left' }} className="relative min-w-full min-h-full">
-                                <svg ref={svgRef} className="absolute inset-0 w-full h-full pointer-events-none z-0 overflow-visible"></svg>
-
-                                {currentScenario.nodes.map((node) => (
-                                    <div key={node.id} id={`canvas-node-${node.id}`} className="w-64 bg-white dark:bg-slate-800 rounded-xl shadow-md border border-gray-200 dark:border-slate-700 p-3 absolute z-10 flex flex-col transition-colors" style={{ left: node.x, top: node.y }}>
-                                    {['top', 'right', 'bottom', 'left'].map(pos => {
-                                        // CEK APAKAH TITIK INI SUDAH TERHUBUNG GARIS
-                                        const isConnected = currentScenario.edges.some(e => 
-                                            (e.source === node.id && e.sourceHandle === pos) || 
-                                            (e.target === node.id && e.targetHandle === pos)
-                                        );
-
-                                        const isSource = connectState && connectState.nodeId === node.id && connectState.handleId === pos;
-                                        const isValidTarget = connectState && connectState.nodeId !== node.id;
-                                        
-                                        const posStyle = pos === 'top' ? { top: -6, left: '50%', transform: 'translateX(-50%)' } 
-                                            : pos === 'bottom' ? { bottom: -6, left: '50%', transform: 'translateX(-50%)' } 
-                                            : pos === 'right' ? { right: -6, top: '50%', transform: 'translateY(-50%)' } 
-                                            : { left: -6, top: '50%', transform: 'translateY(-50%)' };
-
-                                        let handleClass = "node-handle absolute w-3.5 h-3.5 rounded-full transition-all duration-200 z-20 ";
-                                        
-                                        // JIKA SUDAH TERHUBUNG, HANYA SEMBUNYIKAN SECARA VISUAL
-                                        if (isConnected) {
-                                            handleClass += "opacity-0 pointer-events-none";
-                                        } else {
-                                            handleClass += "bg-white dark:bg-slate-200 border-2 border-gray-400 dark:border-slate-500 cursor-crosshair hover:scale-125 ";
-                                            if (isSource) {
-                                                handleClass += "handle-source-active";
-                                            } else if (isValidTarget) {
-                                                handleClass += "handle-target-valid hover:bg-emerald-600 hover:border-emerald-800";
-                                            } else {
-                                                handleClass += "hover:bg-blue-500 hover:border-blue-700";
-                                            }
-                                        }
-
-                                        return <div key={pos} onClick={(e) => handleHandleClick(e, node.id, pos)} className={handleClass} style={posStyle} data-node={node.id} data-handle={pos}></div>;
-                                    })}
-
-                                    <div data-id={node.id} onPointerDown={(e) => startDrag(e, node)} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} className="flex justify-between items-start mb-2 border-b border-gray-100 dark:border-slate-700 pb-2 cursor-grab active:cursor-grabbing node-header" style={{ touchAction: 'none' }}>
-                                        <div className="flex flex-col truncate pr-2 pointer-events-none">
-                                            <div className="flex items-center gap-2 truncate">
-                                                <div className={`w-6 h-6 shrink-0 rounded flex items-center justify-center text-xs ${node.type === 'mock' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'}`}><i className={`fa-solid ${node.type === 'mock' ? 'fa-server' : 'fa-paper-plane'}`}></i></div>
-                                                <span className="font-bold text-sm truncate">{node.name}</span>
-                                            </div>
-                                        </div>
-                                        <div className="flex gap-1 shrink-0 mt-0.5 pointer-events-auto">
-                                            <button onClick={() => removeNode(node.id)} className="text-gray-400 hover:text-red-500 p-1"><i className="fa-solid fa-times text-xs"></i></button>
-                                        </div>
-                                    </div>
-                                    <div className="flex flex-col gap-2 text-xs text-gray-600 dark:text-gray-400 mb-1">
-                                        <div className="flex justify-between items-center"><span>Method:</span><span className={`font-bold method-${node.method}`}>{node.method}</span></div>
-                                        {currentScenario.testType === 'api_flow' && (
-                                            <>
-                                            <div className="flex justify-between items-center"><span>Iterations:</span><input type="number" min="1" max="100" value={node.iterations} onChange={e => handleNodeChange(node.id, 'iterations', e.target.value)} onBlur={e => handleNodeChange(node.id, 'iterations', parseInt(e.target.value)||1)} className="w-16 bg-gray-50 dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded px-1 py-0.5 outline-none" /></div>
-                                            <div className="flex justify-between items-center"><span>Delay (ms):</span><input type="number" min="0" value={node.delay} onChange={e => handleNodeChange(node.id, 'delay', e.target.value)} onBlur={e => handleNodeChange(node.id, 'delay', parseInt(e.target.value)||0)} className="w-16 bg-gray-50 dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded px-1 py-0.5 outline-none" /></div>
-                                            </>
-                                        )}
-                                    </div>
-                                    {node.runStatus && (
-                                        <div className="mt-2 pt-2 border-t border-gray-100 dark:border-slate-700 flex items-center justify-between">
-                                            <div className="flex items-center gap-1.5">
-                                                {node.runStatus.status === 'running' && <i className="fa-solid fa-circle-notch fa-spin text-sm text-blue-500"></i>}
-                                                {node.runStatus.status === 'passed' && <i className="fa-solid fa-check-circle text-sm text-green-500"></i>}
-                                                {node.runStatus.status === 'failed' && <i className="fa-solid fa-times-circle text-sm text-red-500"></i>}
-                                                {node.runStatus.status === 'waiting' && <i className="fa-regular fa-clock text-sm text-yellow-500"></i>}
-                                                <span className={`text-xs font-bold ${node.runStatus.status === 'passed' ? 'text-green-600' : node.runStatus.status === 'failed' ? 'text-red-600' : node.runStatus.status === 'waiting' ? 'text-yellow-600' : 'text-blue-600'}`}>{node.runStatus.text}</span>
-                                            </div>
-                                            <span className="text-[10px] text-gray-500 font-mono font-bold">{node.runStatus.prog}</span>
-                                        </div>
-                                    )}
-                                    </div>
-                                ))}
-                                {currentScenario.nodes.length === 0 && (
-                                    <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center text-gray-500">
-                                        <i className="fa-solid fa-diagram-project text-4xl mb-3 opacity-50"></i><p>Add requests from the library to build your test scenario</p>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* Logs Pane */}
-                        <div className={`absolute bottom-0 left-0 right-0 h-1/3 bg-white dark:bg-slate-800 border-t border-gray-200 dark:border-slate-700 shadow-[0_-5px_15px_-5px_rgba(0,0,0,0.1)] transform transition-transform duration-300 z-50 flex flex-col ${logsOpen ? 'translate-y-0' : 'translate-y-full'}`}>
-                            <div className="px-4 py-2 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center bg-gray-50 dark:bg-slate-800/80">
-                                <span className="font-semibold text-sm">Execution Logs {isRunning && <i className="fa-solid fa-circle-notch fa-spin ml-2 text-blue-500"></i>}</span>
-                                <button onClick={() => setLogsOpen(false)} className="text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"><i className="fa-solid fa-times"></i></button>
-                            </div>
-                            <div className="flex-grow overflow-y-auto scroll-custom p-4 pb-12 font-mono text-xs space-y-2">
-                                {logs.map((log, i) => (
-                                    <div key={i} className={log.type === 'success' ? 'text-green-600 dark:text-green-400' : log.type === 'error' ? 'text-red-600 dark:text-red-400' : log.type === 'warning' ? 'text-orange-600 dark:text-orange-400' : 'text-gray-600 dark:text-gray-400'}>
-                                        <span className="text-gray-400 dark:text-gray-600">[{log.time}]</span> {log.msg}
-                                    </div>
-                                ))}
-                            </div>
+                        <div className="flex-grow overflow-y-auto scroll-custom p-4 pb-12 font-mono text-xs space-y-2">
+                            {logs.map((log, i) => (
+                                <div key={i} className={log.type === 'success' ? 'text-green-600 dark:text-green-400' : log.type === 'error' ? 'text-red-600 dark:text-red-400' : log.type === 'warning' ? 'text-orange-600 dark:text-orange-400' : 'text-gray-600 dark:text-gray-400'}>
+                                    <span className="text-gray-400 dark:text-gray-600">[{log.time}]</span> {log.msg}
+                                </div>
+                            ))}
                         </div>
                     </div>
                 </div>

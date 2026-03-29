@@ -1,187 +1,45 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@layer utilities {
-  .no-scrollbar::-webkit-scrollbar {
-    display: none;
-  }
-  .no-scrollbar {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+@layer base {
+  body {
+    @apply antialiased text-gray-800 dark:text-gray-200 bg-white dark:bg-slate-900 font-sans text-sm;
   }
 }
-
-/* Modern Scrollbar */
-::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-::-webkit-scrollbar-track {
-    background: #f1f1f1;
-}
-::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
-    border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-    background: #94a3b8;
-}
-
-.dark ::-webkit-scrollbar-track {
-    background: #1e293b;
-}
-.dark ::-webkit-scrollbar-thumb {
-    background: #475569;
-}
-.dark ::-webkit-scrollbar-thumb:hover {
-    background: #64748b;
-}
-
-.method-GET { color: #10b981; }
-.method-POST { color: #f59e0b; }
-.method-PUT { color: #3b82f6; }
-.method-DELETE { color: #ef4444; }
-.method-PATCH { color: #8b5cf6; }
-
-@keyframes flow-animation {
-    from { stroke-dashoffset: 20; }
-    to { stroke-dashoffset: 0; }
-}
-.flow-line { stroke-dasharray: 5, 5; }
-.flow-line.running { animation: flow-animation 0.5s linear infinite; stroke: #3b82f6; stroke-width: 3; }
-.flow-line.success { stroke: #10b981; stroke-dasharray: none; }
-.flow-line.error { stroke: #ef4444; stroke-dasharray: none; }
-.edge-delete { pointer-events: auto; cursor: pointer; }
-.edge-delete:hover { stroke: #ef4444; stroke-width: 4; }
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
 
 @layer utilities {
-  .no-scrollbar::-webkit-scrollbar {
-    display: none;
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px; /* Diperkecil dari 8px */
+    height: 6px; /* Diperkecil dari 8px */
   }
-  .no-scrollbar {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
   }
-}
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 dark:bg-slate-600 rounded-full;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400 dark:bg-slate-500;
+  }
 
-/* Modern Scrollbar */
-::-webkit-scrollbar {
+  /* Scrollbar khusus untuk editor kode agar tidak mengganggu */
+  .code-scrollbar::-webkit-scrollbar {
     width: 8px;
     height: 8px;
-}
-::-webkit-scrollbar-track {
-    background: #f1f1f1;
-}
-::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
-    border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-    background: #94a3b8;
+  }
+  .code-scrollbar::-webkit-scrollbar-track {
+    @apply bg-gray-50 dark:bg-slate-900;
+  }
+  .code-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-gray-200 dark:bg-slate-700 rounded-md;
+  }
 }
 
-.dark ::-webkit-scrollbar-track {
-    background: #1e293b;
-}
-.dark ::-webkit-scrollbar-thumb {
-    background: #475569;
-}
-.dark ::-webkit-scrollbar-thumb:hover {
-    background: #64748b;
-}
-
-.method-GET { color: #10b981; }
-.method-POST { color: #f59e0b; }
-.method-PUT { color: #3b82f6; }
-.method-DELETE { color: #ef4444; }
-.method-PATCH { color: #8b5cf6; }
-
-@keyframes flow-animation {
-    from { stroke-dashoffset: 20; }
-    to { stroke-dashoffset: 0; }
-}
-.flow-line { stroke-dasharray: 5, 5; }
-.flow-line.running { animation: flow-animation 0.5s linear infinite; stroke: #3b82f6; stroke-width: 3; }
-.flow-line.success { stroke: #10b981; stroke-dasharray: none; }
-.flow-line.error { stroke: #ef4444; stroke-dasharray: none; }
-.edge-delete { pointer-events: auto; cursor: pointer; }
-.edge-delete:hover { stroke: #ef4444; stroke-width: 4; }
-
-/* ==========================================================================
-   TAMBAHAN BARU: Resty Flow - Custom Styles for Scenario Editor (React Flow)
-   ========================================================================== */
-
-/* 1. Mempertebal Garis Koneksi (Edges) bawaan React Flow */
-.react-flow__edge-path {
-  stroke-width: 3;
-  stroke-linecap: round;
-  transition: stroke-width 0.2s ease;
-}
-
-/* Efek saat garis di-hover atau dipilih */
-.react-flow__edge.selected .react-flow__edge-path,
-.react-flow__edge:hover .react-flow__edge-path {
-  stroke-width: 4;
-}
-
-/* 2. Gaya Dasar Titik Koneksi (Handles) - Dibuat Besar dan Jelas */
-.react-flow__handle {
-  width: 14px !important;
-  height: 14px !important;
-  background-color: #fff !important;
-  border: 2px solid #777 !important;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-  transition: all 0.2s ease-in-out;
-  cursor: crosshair;
-}
-
-/* Gaya Handle saat mouse di atasnya (Hover) */
-.react-flow__handle:hover {
-  transform: scale(1.3);
-  background-color: #e2e8f0 !important;
-  border-color: #444 !important;
-}
-
-/* Menyesuaikan posisi handle agar tetap di tengah sisi node meski ukurannya besar */
-.react-flow__handle-bottom { bottom: -7px !important; }
-.react-flow__handle-top { top: -7px !important; }
-.react-flow__handle-left { left: -7px !important; }
-.react-flow__handle-right { right: -7px !important; }
-
-/* ==========================================================================
-   Definisi Animasi Pulse (Berdenyut) untuk Interaksi Tarik Garis
-   ========================================================================== */
-
-/* Animasi Pulse Merah untuk Titik Asal */
-@keyframes pulse-red {
-  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
-  70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
-}
-
-/* Animasi Pulse Oranye untuk Titik Tujuan Valid */
-@keyframes pulse-orange {
-  0% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.7); }
-  70% { box-shadow: 0 0 0 10px rgba(249, 115, 22, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
-}
-
-/* 3. Animasi MERAH pada Titik Asal (Source) saat user mulai menarik kabel */
-.react-flow__handle-connecting {
-  background-color: #ef4444 !important;
-  border-color: #b91c1c !important;
-  animation: pulse-red 1.5s infinite;
-}
-
-/* 4. Animasi ORANYE pada Titik Tujuan (Target) yang Valid saat kabel didekatkan */
-.react-flow__handle-valid {
-  background-color: #f97316 !important;
-  border-color: #c2410c !important;
-  animation: pulse-orange 1s infinite;
-  transform: scale(1.2);
+/* Animasi untuk collapse/expand */
+.transition-width {
+  transition-property: width;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 200ms;
 }
