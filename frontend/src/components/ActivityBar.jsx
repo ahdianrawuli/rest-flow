@@ -128,6 +128,11 @@ export default function ActivityBar({ sidebarOpen, setSidebarOpen, desktopCollap
                     <i className="fa-solid fa-code text-sm w-4 text-center shrink-0"></i>
                     <span className={`text-xs ${desktopCollapsed ? 'md:hidden' : ''}`}>Variables</span>
                 </NavLink>
+                {/* MENU BARU TAHAP 1: FUNCTIONS */}
+                <NavLink to="/functions" className={navLinkClass} onClick={() => setSidebarOpen(false)} title="Functions">
+                    <i className="fa-solid fa-puzzle-piece text-sm w-4 text-center shrink-0"></i>
+                    <span className={`text-xs ${desktopCollapsed ? 'md:hidden' : ''}`}>Functions</span>
+                </NavLink>
                 <NavLink to="/mocks" className={navLinkClass} onClick={() => setSidebarOpen(false)} title="Mocks">
                     <i className="fa-solid fa-server text-sm w-4 text-center shrink-0"></i>
                     <span className={`text-xs ${desktopCollapsed ? 'md:hidden' : ''}`}>Mocks</span>
@@ -176,7 +181,6 @@ export default function ActivityBar({ sidebarOpen, setSidebarOpen, desktopCollap
                     </div>
                 </div>
 
-                {/* DESAIN BARU: Powered by Autodev 2026 yang Modern & Stylish */}
                 <div className={`${desktopCollapsed ? 'hidden' : 'flex'} justify-center w-full pb-3 pt-3 select-none px-2`}>
                     <div className="flex items-center gap-2 px-3 py-1.5 w-full justify-center rounded-lg bg-gray-50/80 dark:bg-slate-800/50 border border-gray-200/60 dark:border-slate-700/50 shadow-sm backdrop-blur-sm hover:bg-gray-100 dark:hover:bg-slate-800 transition-all duration-300">
                         <i className="fa-solid fa-bolt text-[10px] text-amber-500 animate-pulse"></i>

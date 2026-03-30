@@ -28,9 +28,6 @@ export default function RequestEditor({
     const [newComment, setNewComment] = useState('');
     const [loadingComments, setLoadingComments] = useState(false);
 
-    // =====================================
-    // STATE ENVIRONMENT MANAGEMENT 
-    // =====================================
     const [environments, setEnvironments] = useState([]);
     const [activeEnvId, setActiveEnvId] = useState('');
     const [envVariablesMap, setEnvVariablesMap] = useState({});
@@ -38,11 +35,13 @@ export default function RequestEditor({
     const [showEnvModal, setShowEnvModal] = useState(false);
     const [newEnvName, setNewEnvName] = useState('');
 
-    // PERBAIKAN: Sinkronisasi ID saat ganti workspace agar tidak bocor
+    const [functionsList, setFunctionsList] = useState([]);
+
     useEffect(() => {
         if (activeWorkspaceId) {
             setActiveEnvId(localStorage.getItem(`rf_env_${activeWorkspaceId}`) || '');
             fetchEnvironments();
+            fetchFunctions(); 
         }
     }, [activeWorkspaceId]);
 
@@ -50,18 +49,29 @@ export default function RequestEditor({
         if (!activeWorkspaceId) return;
         try {
             const token = localStorage.getItem('rf_token');
-            const res = await fetch(`/api/workspaces/${activeWorkspaceId}/environments`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const res = await fetch(`/api/workspaces/${activeWorkspaceId}/environments?t=${Date.now()}`, { 
+                headers: { 'Authorization': `Bearer ${token}`, 'Cache-Control': 'no-cache' } 
+            });
             if (res.ok) {
                 const data = await res.json();
                 setEnvironments(data);
                 
                 const map = {};
                 for (const env of data) {
-                    const resVar = await fetch(`/api/environments/${env.id}/variables`, { headers: { 'Authorization': `Bearer ${token}` } });
+                    const resVar = await fetch(`/api/environments/${env.id}/variables?t=${Date.now()}`, { headers: { 'Authorization': `Bearer ${token}`, 'Cache-Control': 'no-cache' } });
                     if (resVar.ok) map[env.id] = await resVar.json();
                 }
                 setEnvVariablesMap(map);
             }
+        } catch(e) {}
+    };
+
+    const fetchFunctions = async () => {
+        if (!activeWorkspaceId) return;
+        try {
+            const token = localStorage.getItem('rf_token');
+            const res = await fetch(`/api/workspaces/${activeWorkspaceId}/functions?t=${Date.now()}`, { headers: { 'Authorization': `Bearer ${token}`, 'Cache-Control': 'no-cache' } });
+            if (res.ok) setFunctionsList(await res.json());
         } catch(e) {}
     };
 
@@ -114,7 +124,7 @@ export default function RequestEditor({
         setLoadingComments(true);
         try {
             const token = localStorage.getItem('rf_token');
-            const res = await fetch(`/api/requests/${currentRequest.id}/comments`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const res = await fetch(`/api/requests/${currentRequest.id}/comments?t=${Date.now()}`, { headers: { 'Authorization': `Bearer ${token}`, 'Cache-Control': 'no-cache' } });
             if (!res.ok) throw new Error("Gagal mengambil komentar");
             const text = await res.text();
             if (text) {
@@ -142,10 +152,12 @@ export default function RequestEditor({
     useEffect(() => { if (activeTab === 'comments' && currentRequest?.id) fetchComments(); }, [activeTab, currentRequest?.id]);
 
     const fetchMonitors = async () => {
+        if (!activeWorkspaceId) return;
         try {
-            const wsId = localStorage.getItem('rf_active_workspace');
             const token = localStorage.getItem('rf_token');
-            const res = await fetch(`/api/workspaces/${wsId}/monitors`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const res = await fetch(`/api/workspaces/${activeWorkspaceId}/monitors?t=${Date.now()}`, { 
+                headers: { 'Authorization': `Bearer ${token}`, 'Cache-Control': 'no-cache' } 
+            });
             if (res.ok) {
                 const data = await res.json();
                 if (Array.isArray(data)) setMonitors(data);
@@ -153,30 +165,41 @@ export default function RequestEditor({
         } catch(e) {}
     };
 
-    useEffect(() => { if (showMonitorModal) fetchMonitors(); }, [showMonitorModal]);
+    useEffect(() => { if (showMonitorModal) fetchMonitors(); }, [showMonitorModal, activeWorkspaceId]);
 
     const handleSaveMonitor = async () => {
+        if (!activeWorkspaceId) return showAlert('Workspace tidak ditemukan', 'error');
         setIsSavingMonitor(true);
         try {
-            const wsId = localStorage.getItem('rf_active_workspace');
             const token = localStorage.getItem('rf_token');
-            const res = await fetch(`/api/workspaces/${wsId}/monitors`, {
+            
+            if (!cronSchedule || cronSchedule.trim().split(/\s+/).length < 5) {
+                throw new Error("Format Cron tidak valid (Minimal 5 bagian yang dipisahkan spasi)");
+            }
+
+            const res = await fetch(`/api/workspaces/${activeWorkspaceId}/monitors`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({ name: monitorName || `Monitor: ${currentRequest?.name || 'Request'}`, folder_id: currentRequest?.folder_id || null, schedule_cron: cronSchedule, is_active: true })
             });
-            if(!res.ok) throw new Error("Format Cron tidak valid");
-            setMonitorModalTab('list'); fetchMonitors();
+            
+            if(!res.ok) {
+                const errData = await res.json().catch(()=>({}));
+                throw new Error(errData.error || "Gagal menyimpan jadwal Cron");
+            }
+            
+            setMonitorModalTab('list'); 
+            await fetchMonitors(); 
+            setMonitorName(''); 
             if(typeof showAlert === 'function') showAlert('Cron Job Monitor berhasil didaftarkan!', 'success');
         } catch (e) { if(typeof showAlert === 'function') showAlert(e.message, 'error'); } finally { setIsSavingMonitor(false); }
     };
 
     const handleDeleteMonitor = async (monitorId) => {
-        if (!window.confirm("Yakin ingin menghapus jadwal monitor ini?")) return;
+        if (!activeWorkspaceId || !window.confirm("Yakin ingin menghapus jadwal monitor ini?")) return;
         try {
-            const wsId = localStorage.getItem('rf_active_workspace');
             const token = localStorage.getItem('rf_token');
-            const res = await fetch(`/api/workspaces/${wsId}/monitors/${monitorId}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+            const res = await fetch(`/api/workspaces/${activeWorkspaceId}/monitors/${monitorId}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
             if(res.ok) { fetchMonitors(); if(typeof showAlert === 'function') showAlert('Monitor berhasil dihapus', 'success'); } 
             else throw new Error("Gagal menghapus monitor");
         } catch(e) { if(typeof showAlert === 'function') showAlert(e.message, 'error'); }
@@ -187,31 +210,46 @@ export default function RequestEditor({
         setExpandedMonitorId(monitorId);
         setLoadingMonitorHistory(true);
         try {
-            const wsId = localStorage.getItem('rf_active_workspace');
             const token = localStorage.getItem('rf_token');
-            const res = await fetch(`/api/workspaces/${wsId}/monitors/${monitorId}/history`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const res = await fetch(`/api/workspaces/${activeWorkspaceId}/monitors/${monitorId}/history?t=${Date.now()}`, { 
+                headers: { 'Authorization': `Bearer ${token}`, 'Cache-Control': 'no-cache' } 
+            });
             if (res.ok) setMonitorHistories(await res.json());
         } catch(e) {} finally { setLoadingMonitorHistory(false); }
     };
 
-    const generateSnippet = async (lang) => {
+    const generateSnippetClientSide = (lang) => {
         setSnippetLoading(true);
         try {
-            const token = localStorage.getItem('rf_token');
-            const safeHeaders = Array.isArray(currentRequest?.headers) ? currentRequest.headers : [];
-            const res = await fetch(`/api/generate-snippet`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({
-                    target: lang,
-                    request: { url: currentRequest?.url || '', method: currentRequest?.method || 'GET', headers: JSON.stringify(safeHeaders.filter(h => h.key && h.key.trim() !== '')), bodyType: currentRequest?.bodyType || 'none', body: currentRequest?.body || '' }
-                })
-            });
-            const data = await res.json();
-            setSnippetCode(data.snippet || '// Failed to generate snippet'); setCopied(false);
-        } catch (e) { setSnippetCode('// Error connecting to snippet generator: ' + e.message); } finally { setSnippetLoading(false); }
+            const method = (currentRequest.method || 'GET').toUpperCase();
+            const url = currentRequest.url || '';
+            const safeHeaders = Array.isArray(currentRequest?.headers) ? currentRequest.headers.filter(h => h.key && h.key.trim() !== '') : [];
+            const body = currentRequest.body || '';
+
+            let snippet = '';
+            if (lang === 'curl') {
+                snippet = `curl --location --request ${method} '${url}' \\\n`;
+                safeHeaders.forEach(h => { snippet += `--header '${h.key}: ${h.value}' \\\n`; });
+                if (currentRequest.bodyType === 'json' && body) snippet += `--data-raw '${body.replace(/'/g, "'\\''")}'`;
+            } else if (lang === 'axios') {
+                snippet = `const axios = require('axios');\n\nlet config = {\n  method: '${method.toLowerCase()}',\n  maxBodyLength: Infinity,\n  url: '${url}',\n  headers: { \n    ${safeHeaders.map(h => `'${h.key}': '${h.value}'`).join(',\n    ')}\n  },\n  data : ${currentRequest.bodyType === 'json' && body ? `'${body}'` : "''"}\n};\n\naxios.request(config)\n.then((response) => {\n  console.log(JSON.stringify(response.data));\n})\n.catch((error) => {\n  console.log(error);\n});`;
+            } else if (lang === 'fetch') {
+                snippet = `const myHeaders = new Headers();\n${safeHeaders.map(h => `myHeaders.append("${h.key}", "${h.value}");`).join('\n')}\n\nconst requestOptions = {\n  method: "${method}",\n  headers: myHeaders,\n  body: ${currentRequest.bodyType !== 'none' && body ? `JSON.stringify(${body})` : "null"},\n  redirect: "follow"\n};\n\nfetch("${url}", requestOptions)\n  .then((response) => response.text())\n  .then((result) => console.log(result))\n  .catch((error) => console.error(error));`;
+            } else if (lang === 'python-requests') {
+                snippet = `import requests\nimport json\n\nurl = "${url}"\n\npayload = ${currentRequest.bodyType==='json' && body ? `json.dumps(${body})` : '""'}\nheaders = {\n  ${safeHeaders.map(h => `'${h.key}': '${h.value}'`).join(',\n  ')}\n}\n\nresponse = requests.request("${method}", url, headers=headers, data=payload)\n\nprint(response.text)`;
+            } else {
+                snippet = `// Language target '${lang}' is not supported yet.`;
+            }
+            setSnippetCode(snippet);
+            setCopied(false);
+        } catch (e) {
+            setSnippetCode('// Error generating snippet: ' + e.message);
+        } finally {
+            setSnippetLoading(false);
+        }
     };
 
-    useEffect(() => { if (showSnippetModal) generateSnippet(snippetTarget); }, [showSnippetModal, snippetTarget]);
+    useEffect(() => { if (showSnippetModal) generateSnippetClientSide(snippetTarget); }, [showSnippetModal, snippetTarget, currentRequest]);
 
     const copyToClipboard = () => { navigator.clipboard.writeText(snippetCode); setCopied(true); setTimeout(() => setCopied(false), 2000); };
 
@@ -313,6 +351,44 @@ export default function RequestEditor({
         a.href = url; a.download = `request-${currentRequest.name.replace(/\s+/g, '-')}.json`; a.click(); URL.revokeObjectURL(url);
     };
 
+    const applyVariablesAsync = async (text, varsArr, funcsArr) => {
+        if (!text || typeof text !== 'string') return text;
+        let result = text;
+
+        (varsArr || []).forEach(v => {
+            if (v.var_key && v.var_value !== undefined && v.var_value !== null) {
+                const regex = new RegExp(`\\{\\{${v.var_key}\\}\\}`, 'g');
+                result = result.replace(regex, v.var_value);
+            }
+        });
+
+        const fnRegex = /\{\{fn:([a-zA-Z0-9_]+)\}\}/g;
+        let match;
+        const matches = [];
+        
+        while ((match = fnRegex.exec(result)) !== null) {
+            matches.push({ full: match[0], fnName: match[1] });
+        }
+
+        for (const m of matches) {
+            const fnDef = (funcsArr || []).find(f => f.name === m.fnName);
+            if (fnDef) {
+                try {
+                    const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+                    const func = new AsyncFunction('variables', fnDef.script);
+                    const varMap = varsArr.reduce((acc, v) => ({ ...acc, [v.var_key]: v.var_value }), {});
+                    
+                    const val = await func(varMap);
+                    result = result.replace(m.full, val !== undefined && val !== null ? String(val) : '');
+                } catch (e) {
+                    console.error(`Error executing function ${m.fnName}:`, e);
+                }
+            }
+        }
+        
+        return result;
+    };
+
     const executeSend = async (e) => {
         e.preventDefault();
         if (!currentRequest.url) return;
@@ -334,17 +410,6 @@ export default function RequestEditor({
             variables: mergedVars.reduce((acc, v) => ({ ...acc, [v.var_key]: v.var_value }), {})
         };
 
-        const applyVariables = (text) => {
-            if (!text) return text; let result = String(text);
-            mergedVars.forEach(v => {
-                if (v.var_key && v.var_value !== undefined && v.var_value !== null) {
-                    const regex = new RegExp(`\\{\\{${v.var_key}\\}\\}`, 'g');
-                    result = result.replace(regex, v.var_value);
-                }
-            });
-            return result;
-        };
-
         try {
             const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
             if(currentRequest.pre_request_script) {
@@ -353,32 +418,68 @@ export default function RequestEditor({
             }
         } catch (e) {}
 
-        let url = applyVariables(context.request.url);
+        let url = await applyVariablesAsync(context.request.url, mergedVars, functionsList);
         let finalUrl;
         try { finalUrl = new URL(url); } 
         catch (err) { return typeof setResponseState === 'function' && setResponseState({ loading: false, data: null, error: 'Invalid URL format', time: 0, assertions: [] }); }
 
-        let finalHeaders = context.request.headers.filter(h => h.key.trim() !== '').map(h => ({ key: applyVariables(h.key), value: applyVariables(h.value) }));
+        let finalHeaders = [];
+        for (const h of context.request.headers) {
+            if (h.key.trim() !== '') {
+                const k = await applyVariablesAsync(h.key, mergedVars, functionsList);
+                const v = await applyVariablesAsync(h.value, mergedVars, functionsList);
+                finalHeaders.push({ key: k, value: v });
+            }
+        }
 
         const auth = currentRequest.authorization;
         if (auth.type === 'bearer' && auth.token) {
-            finalHeaders.push({ key: 'Authorization', value: `Bearer ${applyVariables(auth.token)}` });
+            const tokenStr = await applyVariablesAsync(auth.token, mergedVars, functionsList);
+            finalHeaders.push({ key: 'Authorization', value: `Bearer ${tokenStr}` });
         } else if (auth.type === 'basic' && auth.username) {
-            finalHeaders.push({ key: 'Authorization', value: `Basic ${btoa(`${applyVariables(auth.username)}:${applyVariables(auth.password)}`)}` });
+            const userStr = await applyVariablesAsync(auth.username, mergedVars, functionsList);
+            const passStr = await applyVariablesAsync(auth.password, mergedVars, functionsList);
+            finalHeaders.push({ key: 'Authorization', value: `Basic ${btoa(`${userStr}:${passStr}`)}` });
         } else if (auth.type === 'apikey' && auth.apikey) {
-            if (auth.addto === 'header') finalHeaders.push({ key: applyVariables(auth.apikey), value: applyVariables(auth.apivalue) });
-            else finalUrl.searchParams.append(applyVariables(auth.apikey), applyVariables(auth.apivalue));
+            const ak = await applyVariablesAsync(auth.apikey, mergedVars, functionsList);
+            const av = await applyVariablesAsync(auth.apivalue, mergedVars, functionsList);
+            if (auth.addto === 'header') finalHeaders.push({ key: ak, value: av });
+            else finalUrl.searchParams.append(ak, av);
         }
 
         try {
             const rawBody = ['json', 'xml', 'text', 'html'].includes(currentRequest.bodyType) ? context.request.body : '';
-            const processedBody = applyVariables(rawBody);
+            const processedBody = await applyVariablesAsync(rawBody, mergedVars, functionsList);
+
+            let formDataEntries = [];
+            let urlencodedEntries = [];
+
+            if (currentRequest.bodyType === 'form-data') {
+                for (const f of currentRequest.formData) {
+                    if (f.key.trim() !== '') {
+                        formDataEntries.push({
+                            ...f, 
+                            key: await applyVariablesAsync(f.key, mergedVars, functionsList), 
+                            value: f.type === 'text' ? await applyVariablesAsync(f.value, mergedVars, functionsList) : f.value
+                        });
+                    }
+                }
+            } else if (currentRequest.bodyType === 'urlencoded') {
+                for (const f of currentRequest.urlencoded) {
+                    if (f.key.trim() !== '') {
+                        urlencodedEntries.push({
+                            ...f, 
+                            key: await applyVariablesAsync(f.key, mergedVars, functionsList), 
+                            value: await applyVariablesAsync(f.value, mergedVars, functionsList)
+                        });
+                    }
+                }
+            }
 
             const proxyData = {
                 method: context.request.method, url: finalUrl.toString(), headersStr: JSON.stringify(finalHeaders),
                 bodyType: currentRequest.bodyType, bodyContent: processedBody,
-                formDataEntries: currentRequest.bodyType === 'form-data' ? currentRequest.formData.filter(f => f.key.trim() !== '') : [],
-                urlencodedEntries: currentRequest.bodyType === 'urlencoded' ? currentRequest.urlencoded.filter(f => f.key.trim() !== '') : []
+                formDataEntries: formDataEntries, urlencodedEntries: urlencodedEntries
             };
 
             const response = await ApiService.proxyRequest(proxyData);
@@ -802,7 +903,7 @@ export default function RequestEditor({
                     <div className="bg-white dark:bg-slate-850 w-full max-w-2xl rounded-xl shadow-2xl overflow-hidden border border-gray-200 dark:border-slate-700 flex flex-col max-h-[80vh]">
                         <div className="px-4 py-3 border-b border-gray-100 dark:border-slate-700 flex justify-between items-center bg-gray-50 dark:bg-slate-800 shrink-0">
                             <div className="flex gap-4">
-                                <button onClick={() => setMonitorModalTab('list')} className={`font-bold text-sm flex items-center gap-2 pb-1 border-b-2 transition-colors ${monitorModalTab === 'list' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500'}`}>
+                                <button onClick={() => { setMonitorModalTab('list'); fetchMonitors(); }} className={`font-bold text-sm flex items-center gap-2 pb-1 border-b-2 transition-colors ${monitorModalTab === 'list' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500'}`}>
                                     <i className="fa-solid fa-list"></i> Riwayat Monitor
                                 </button>
                                 <button onClick={() => setMonitorModalTab('create')} className={`font-bold text-sm flex items-center gap-2 pb-1 border-b-2 transition-colors ${monitorModalTab === 'create' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500'}`}>

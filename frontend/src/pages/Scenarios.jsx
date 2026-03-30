@@ -7,8 +7,10 @@ export default function Scenarios({ activeWorkspaceId }) {
     const [mocks, setMocks] = useState([]);
     const [folders, setFolders] = useState([]);
     const [variablesList, setVariablesList] = useState([]);
+    
+    // TAHAP 3: TAMBAHKAN STATE FUNCTIONS LIST
+    const [functionsList, setFunctionsList] = useState([]);
 
-    // --- STATE UNTUK ENVIRONMENT ---
     const [environments, setEnvironments] = useState([]);
     const [activeEnvId, setActiveEnvId] = useState('');
     const [envVariablesMap, setEnvVariablesMap] = useState({});
@@ -60,15 +62,24 @@ export default function Scenarios({ activeWorkspaceId }) {
 
     useEffect(() => { scenarioRef.current = currentScenario; }, [currentScenario]);
 
-    // PERBAIKAN: Sinkronisasi ID saat ganti workspace agar tidak bocor
     useEffect(() => {
         if (activeWorkspaceId) {
             setActiveEnvId(localStorage.getItem(`rf_env_${activeWorkspaceId}`) || '');
             loadLibraryData();
             loadScenarios();
-            fetchEnvironments(); 
+            fetchEnvironments();
+            fetchFunctions(); // Panggil function list
         }
     }, [activeWorkspaceId]);
+
+    // FETCH FUNCTIONS (TAHAP 3)
+    const fetchFunctions = async () => {
+        try {
+            const token = localStorage.getItem('rf_token');
+            const res = await fetch(`/api/workspaces/${activeWorkspaceId}/functions`, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (res.ok) setFunctionsList(await res.json());
+        } catch(e) {}
+    };
 
     const fetchEnvironments = async () => {
         if (!activeWorkspaceId) return;
@@ -472,7 +483,6 @@ export default function Scenarios({ activeWorkspaceId }) {
         exportHTMLToExcel(title, date, tableHTML, `PerformanceReport_${currentScenario.name.replace(/\s+/g, '_')}`);
     };
 
-    // PERLINDUNGAN UPDATE STATE (Cegah balapan saat multiple node eksekusi)
     const updateNodeStatus = (id, status, text, prog = '') => {
         setCurrentScenario(prev => {
             if (!prev.nodes) return prev;
@@ -493,6 +503,50 @@ export default function Scenarios({ activeWorkspaceId }) {
         });
     };
 
+    // =====================================
+    // ASYNC VARIABLE PARSER (TAHAP 3)
+    // =====================================
+    const applyVariablesAsync = async (text, varsArr, funcsArr) => {
+        if (!text || typeof text !== 'string') return text;
+        let result = text;
+
+        // Static Variables (Env & Global)
+        (varsArr || []).forEach(v => {
+            if (v.var_key && v.var_value !== undefined && v.var_value !== null) {
+                const regex = new RegExp(`\\{\\{${v.var_key}\\}\\}`, 'g');
+                result = result.replace(regex, v.var_value);
+            }
+        });
+
+        // Dynamic Functions ({{fn:...}})
+        const fnRegex = /\{\{fn:([a-zA-Z0-9_]+)\}\}/g;
+        let match;
+        const matches = [];
+        
+        while ((match = fnRegex.exec(result)) !== null) {
+            matches.push({ full: match[0], fnName: match[1] });
+        }
+
+        for (const m of matches) {
+            const fnDef = (funcsArr || []).find(f => f.name === m.fnName);
+            if (fnDef) {
+                try {
+                    const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+                    const func = new AsyncFunction('variables', fnDef.script);
+                    const varMap = varsArr.reduce((acc, v) => ({ ...acc, [v.var_key]: v.var_value }), {});
+                    
+                    const val = await func(varMap);
+                    result = result.replace(m.full, val !== undefined && val !== null ? String(val) : '');
+                } catch (e) {
+                    console.error(`Error executing function ${m.fnName}:`, e);
+                }
+            }
+        }
+        
+        return result;
+    };
+
+
     const runApiFlowTest = async () => {
         if (currentScenario.nodes.length === 0) return showAlert('No nodes to run', 'warning');
         setIsRunning(true); abortRef.current = false;
@@ -511,16 +565,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                     else runtimeVariables.push(ev);
                 });
             }
-
-            const applyVariablesToText = (text, varsArr) => {
-                if (!text) return text; let result = String(text);
-                (varsArr || []).forEach(v => { 
-                    if (v.var_key && v.var_value !== undefined && v.var_value !== null) {
-                        result = result.replace(new RegExp(`\\{\\{${v.var_key}\\}\\}`, 'g'), v.var_value); 
-                    }
-                });
-                return result;
-            };
 
             const nodesCopy = [...currentScenario.nodes]; nodesCopy.forEach(n => { n.runStatus = null; });
             const edgesCopy = [...currentScenario.edges]; edgesCopy.forEach(e => { delete e.runtimeStatus; });
@@ -592,31 +636,61 @@ export default function Scenarios({ activeWorkspaceId }) {
                                     let context = { request: { url: reqData.url, method: reqData.method, headers: rawHeaders, body: reqData.body }, response: null, variables: runtimeVariables.reduce((acc, v) => ({ ...acc, [v.var_key]: v.var_value }), {}) };
                                     context = await runScript(reqData.pre_request_script, context);
                                     
-                                    let url = applyVariablesToText(context.request.url, runtimeVariables); 
+                                    // IMPLEMENTASI ASYNC PARSER
+                                    let url = await applyVariablesAsync(context.request.url, runtimeVariables, functionsList); 
                                     let finalUrl = new URL(url); 
                                     
-                                    let finalHeaders = context.request.headers.filter(h => h.key && h.key.trim() !== '').map(h => ({ key: applyVariablesToText(h.key, runtimeVariables), value: applyVariablesToText(h.value, runtimeVariables) }));
+                                    let finalHeaders = [];
+                                    for (const h of context.request.headers) {
+                                        if (h.key && h.key.trim() !== '') {
+                                            const k = await applyVariablesAsync(h.key, runtimeVariables, functionsList);
+                                            const v = await applyVariablesAsync(h.value, runtimeVariables, functionsList);
+                                            finalHeaders.push({ key: k, value: v });
+                                        }
+                                    }
 
                                     if (rawAuth) {
-                                        if (rawAuth.type === 'bearer' && rawAuth.token) { finalHeaders.push({ key: 'Authorization', value: `Bearer ${applyVariablesToText(rawAuth.token, runtimeVariables)}` }); } 
-                                        else if (rawAuth.type === 'basic' && rawAuth.username) { finalHeaders.push({ key: 'Authorization', value: `Basic ${btoa(`${applyVariablesToText(rawAuth.username, runtimeVariables)}:${applyVariablesToText(rawAuth.password, runtimeVariables)}`)}` }); } 
+                                        if (rawAuth.type === 'bearer' && rawAuth.token) { finalHeaders.push({ key: 'Authorization', value: `Bearer ${await applyVariablesAsync(rawAuth.token, runtimeVariables, functionsList)}` }); } 
+                                        else if (rawAuth.type === 'basic' && rawAuth.username) { finalHeaders.push({ key: 'Authorization', value: `Basic ${btoa(`${await applyVariablesAsync(rawAuth.username, runtimeVariables, functionsList)}:${await applyVariablesAsync(rawAuth.password, runtimeVariables, functionsList)}`)}` }); } 
                                         else if (rawAuth.type === 'apikey' && rawAuth.apikey) {
-                                            if (rawAuth.addto === 'header') finalHeaders.push({ key: applyVariablesToText(rawAuth.apikey, runtimeVariables), value: applyVariablesToText(rawAuth.apivalue, runtimeVariables) });
-                                            else finalUrl.searchParams.append(applyVariablesToText(rawAuth.apikey, runtimeVariables), applyVariablesToText(rawAuth.apivalue, runtimeVariables));
+                                            const ak = await applyVariablesAsync(rawAuth.apikey, runtimeVariables, functionsList);
+                                            const av = await applyVariablesAsync(rawAuth.apivalue, runtimeVariables, functionsList);
+                                            if (rawAuth.addto === 'header') finalHeaders.push({ key: ak, value: av });
+                                            else finalUrl.searchParams.append(ak, av);
                                         }
                                     }
 
                                     let bType = reqData.bodyType || reqData.body_type || 'none';
                                     let rawBodyString = ['json', 'xml', 'text', 'html'].includes(bType) ? context.request.body : '';
-                                    let processedBody = applyVariablesToText(rawBodyString, runtimeVariables);
+                                    let processedBody = await applyVariablesAsync(rawBodyString, runtimeVariables, functionsList);
                                     let formDataEntries = []; let urlencodedEntries = [];
 
                                     if (bType === 'form-data') {
                                         let fData = typeof reqData.body === 'string' ? JSON.parse(reqData.body) : (reqData.body || []);
-                                        if (Array.isArray(fData)) formDataEntries = fData.filter(f => f.key && f.key.trim() !== '').map(f => ({...f, key: applyVariablesToText(f.key, runtimeVariables), value: f.type === 'text' ? applyVariablesToText(f.value, runtimeVariables) : f.value}));
+                                        if (Array.isArray(fData)) {
+                                            for (const f of fData) {
+                                                if (f.key && f.key.trim() !== '') {
+                                                    formDataEntries.push({
+                                                        ...f, 
+                                                        key: await applyVariablesAsync(f.key, runtimeVariables, functionsList), 
+                                                        value: f.type === 'text' ? await applyVariablesAsync(f.value, runtimeVariables, functionsList) : f.value
+                                                    });
+                                                }
+                                            }
+                                        }
                                     } else if (bType === 'urlencoded') {
                                         let uData = typeof reqData.body === 'string' ? JSON.parse(reqData.body) : (reqData.body || []);
-                                        if (Array.isArray(uData)) urlencodedEntries = uData.filter(f => f.key && f.key.trim() !== '').map(f => ({...f, key: applyVariablesToText(f.key, runtimeVariables), value: applyVariablesToText(f.value, runtimeVariables)}));
+                                        if (Array.isArray(uData)) {
+                                            for (const f of uData) {
+                                                if (f.key && f.key.trim() !== '') {
+                                                    urlencodedEntries.push({
+                                                        ...f, 
+                                                        key: await applyVariablesAsync(f.key, runtimeVariables, functionsList), 
+                                                        value: await applyVariablesAsync(f.value, runtimeVariables, functionsList)
+                                                    });
+                                                }
+                                            }
+                                        }
                                     }
 
                                     const proxyData = { method: context.request.method, url: finalUrl.toString(), headersStr: JSON.stringify(finalHeaders), bodyType: bType, bodyContent: processedBody, formDataEntries, urlencodedEntries };
@@ -825,11 +899,6 @@ export default function Scenarios({ activeWorkspaceId }) {
 
             const runVU = async (vuId) => {
                 let vuVariables = JSON.parse(JSON.stringify(mergedVars)); 
-                const applyVars = (text) => {
-                    if (!text) return text; let result = String(text);
-                    vuVariables.forEach(v => { if (v.var_key && v.var_value !== undefined && v.var_value !== null) result = result.replace(new RegExp(`\\{\\{${v.var_key}\\}\\}`, 'g'), v.var_value); });
-                    return result;
-                };
 
                 while (Date.now() - startTime < durationMs && !abortRef.current) {
                     const traverse = async (nodeId) => {
@@ -845,10 +914,14 @@ export default function Scenarios({ activeWorkspaceId }) {
                             try {
                                 let isSuccess = false;
                                 if (node.type === 'request') {
-                                    let url = applyVars(reqData.url); let finalUrl = new URL(url);
+                                    
+                                    // IMPLEMENTASI ASYNC PARSER DI DALAM VIRTUAL USER LOOP
+                                    let url = await applyVariablesAsync(reqData.url, vuVariables, functionsList); 
+                                    let finalUrl = new URL(url);
                                     let bType = reqData.bodyType || reqData.body_type || 'none';
                                     let rawBodyString = ['json', 'xml', 'text', 'html'].includes(bType) ? reqData.body : '';
-                                    let processedBody = applyVars(rawBodyString);
+                                    let processedBody = await applyVariablesAsync(rawBodyString, vuVariables, functionsList);
+                                    
                                     const proxyData = { method: reqData.method, url: finalUrl.toString(), headersStr: '[]', bodyType: bType, bodyContent: processedBody, formDataEntries: [], urlencodedEntries: [] };
                                     
                                     resultDetail.reqHeaders = proxyData.headersStr;
@@ -1321,7 +1394,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                         </div>
                     </div>
 
-                    {/* Logs Pane */}
                     <div className={`absolute bottom-0 left-0 right-0 h-1/3 bg-white dark:bg-slate-800 border-t border-gray-200 dark:border-slate-700 shadow-[0_-5px_15px_-5px_rgba(0,0,0,0.1)] transform transition-transform duration-300 z-50 flex flex-col ${logsOpen ? 'translate-y-0' : 'translate-y-full'}`}>
                         <div className="px-4 py-2 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center bg-gray-50 dark:bg-slate-800/80">
                             <span className="font-semibold text-sm">Execution Logs {isRunning && <i className="fa-solid fa-circle-notch fa-spin ml-2 text-blue-500"></i>}</span>

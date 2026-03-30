@@ -8,6 +8,7 @@ import Mocks from './pages/Mocks';
 import Scenarios from './pages/Scenarios';
 import Header from './components/Header';
 import ActivityBar from './components/ActivityBar';
+import Functions from './pages/Functions';
 
 function RequireAuth({ children }) {
     const token = localStorage.getItem('rf_token');
@@ -101,6 +102,7 @@ function MainLayout({ theme, toggleTheme, activeWorkspaceId, setActiveWorkspaceI
                             <Route path="/variables" element={<Variables activeWorkspaceId={activeWorkspaceId} />} />
                             <Route path="/mocks" element={<Mocks activeWorkspaceId={activeWorkspaceId} />} />
                             <Route path="/scenarios" element={<Scenarios activeWorkspaceId={activeWorkspaceId} />} />
+                 	    <Route path="/functions" element={<Functions activeWorkspaceId={activeWorkspaceId} />} />
                         </Routes>
                     </div>
                 </div>
