@@ -21,15 +21,80 @@ app.use(express.urlencoded({ extended: true }));
 
 const upload = multer();
 const server = http.createServer(app);
-const wss = new ws.WebSocketServer({ server, path: '/agent-ws' });
+
+// Memisahkan WebSocket Server untuk Agent dan UI Frontend
+const wssAgent = new ws.WebSocketServer({ noServer: true });
+const wssUI = new ws.WebSocketServer({ noServer: true });
 
 let pool;
 
 const connectedAgents = new Map();
 const pendingRequests = new Map();
 const activeCronJobs = new Map();
+const connectedUIs = new Map(); // State untuk menyimpan koneksi Web Frontend
 
-wss.on('connection', async (wsClient, req) => {
+// Handle Upgrade WebSocket secara manual
+server.on('upgrade', (request, socket, head) => {
+    const pathname = request.url.split('?')[0];
+    
+    if (pathname === '/agent-ws') {
+        wssAgent.handleUpgrade(request, socket, head, (ws) => {
+            wssAgent.emit('connection', ws, request);
+        });
+    } else if (pathname === '/ui-ws') {
+        wssUI.handleUpgrade(request, socket, head, (ws) => {
+            wssUI.emit('connection', ws, request);
+        });
+    } else {
+        socket.destroy();
+    }
+});
+
+// ==========================================
+// WEBSOCKET: FRONTEND UI HANDLER
+// ==========================================
+wssUI.on('connection', async (wsClient, req) => {
+    try {
+        // PERBAIKAN BUG TYPO: Menggunakan `req` bukan `request`
+        const urlObj = new URL(req.url, `http://${req.headers.host}`); 
+        const token = urlObj.searchParams.get('token'); 
+        if (!token) return wsClient.close(4001, 'Unauthorized');
+
+        jwt.verify(token, JWT_SECRET, (err, user) => {
+            if (err) return wsClient.close(403, 'Forbidden');
+            connectedUIs.set(user.id, wsClient);
+
+            wsClient.isAlive = true;
+            wsClient.on('pong', () => { wsClient.isAlive = true; });
+
+            // Menerima perintah dari UI React dan meneruskannya ke Golang Agent
+            wsClient.on('message', (message) => {
+                try {
+                    const parsed = JSON.parse(message);
+                    // Rute khusus untuk perintah ADB, Logcat, dan Chaos Engine
+                    if (['DEVICE_ACTION', 'LOGCAT', 'CHAOS_CONFIG'].includes(parsed.type)) {
+                        const agentConn = connectedAgents.get(user.id);
+                        if (agentConn && agentConn.readyState === ws.OPEN) {
+                            agentConn.send(message); // Forward JSON secara utuh ke Agen
+                        }
+                    }
+                } catch(e) { console.error("Error parsing UI message:", e); }
+            });
+
+            wsClient.on('close', () => {
+                if (connectedUIs.get(user.id) === wsClient) connectedUIs.delete(user.id);
+            });
+        });
+    } catch(e) { 
+        console.error("UI WS Connection Error:", e);
+        wsClient.close(5000, 'Server Error'); 
+    }
+});
+
+// ==========================================
+// WEBSOCKET: GOLANG AGENT HANDLER
+// ==========================================
+wssAgent.on('connection', async (wsClient, req) => {
     try {
         const urlObj = new URL(req.url, `http://${req.headers.host}`);
         const token = urlObj.searchParams.get('token');
@@ -47,9 +112,25 @@ wss.on('connection', async (wsClient, req) => {
         wsClient.on('message', (message) => {
             try {
                 const parsed = JSON.parse(message);
-                if (parsed.type === 'RESPONSE' && pendingRequests.has(parsed.id)) {
-                    pendingRequests.get(parsed.id).resolve(parsed);
-                    pendingRequests.delete(parsed.id);
+                
+                // Mencari ID dari root object maupun dari dalam object .data
+                const reqId = parsed.id || (parsed.data && parsed.data.id);
+
+                if (parsed.type === 'RESPONSE' && pendingRequests.has(reqId)) {
+                    // Resolve menggunakan parsed.data agar sesuai format yang dibaca oleh /api/proxy
+                    pendingRequests.get(reqId).resolve(parsed.data || parsed);
+                    pendingRequests.delete(reqId);
+                } else if (parsed.type === 'INTERCEPT_TRAFFIC') {
+                    const uiConn = connectedUIs.get(userId);
+                    if (uiConn && uiConn.readyState === ws.OPEN) {
+                        uiConn.send(JSON.stringify({ type: 'INTERCEPT_TRAFFIC', data: parsed.data }));
+                    }
+                } else if (parsed.type === 'LOGCAT_TRAFFIC' || parsed.type === 'DEVICE_ACTION_RESULT') {
+                    // Meneruskan Logcat Stream & Hasil Eksekusi ADB dari Agent ke React UI
+                    const uiConn = connectedUIs.get(userId);
+                    if (uiConn && uiConn.readyState === ws.OPEN) {
+                        uiConn.send(JSON.stringify({ type: parsed.type, data: parsed.data }));
+                    }
                 }
             } catch(e) {}
         });
@@ -433,9 +514,6 @@ app.delete('/api/environments/variables/:id', authenticateToken, async (req, res
     try { await pool.query('DELETE FROM environment_variables WHERE id = ?', [req.params.id]); res.json({ message: 'Deleted' }); } catch (e) { res.status(500).json({ error: 'Error' }); }
 });
 
-// ==========================================
-// ROUTE API REQUEST HISTORY & COMMENTS
-// ==========================================
 app.get('/api/requests/:requestId/comments', authenticateToken, async (req, res) => {
     try {
         const [rows] = await pool.query('SELECT c.*, u.username FROM comments c JOIN users u ON c.user_id = u.id WHERE c.request_id = ? ORDER BY c.created_at ASC', [req.params.requestId]);
@@ -576,7 +654,6 @@ app.delete('/api/workspaces/:workspaceId/scenarios/:id', authenticateToken, asyn
 app.post('/api/workspaces/:workspaceId/monitors', authenticateToken, async (req, res) => {
     try {
         const { name, folder_id, schedule_cron, is_active } = req.body;
-        // VALIDASI MANUAL: Cek apakah format dipisahkan oleh spasi (minimal 5 bagian)
         if (!schedule_cron || schedule_cron.trim().split(/\s+/).length < 5) {
             return res.status(400).json({ error: 'Invalid Cron expression' });
         }
@@ -608,7 +685,6 @@ app.delete('/api/workspaces/:workspaceId/monitors/:id', authenticateToken, async
         res.json({ message: 'Monitor deleted' });
     } catch (e) { res.status(500).json({ error: 'Error deleting monitor' }); }
 });
-
 
 app.post('/api/proxy', authenticateToken, upload.any(), async (req, res) => {
     try {
@@ -682,12 +758,19 @@ app.get('/api/workspaces/:workspaceId/export', authenticateToken, async (req, re
     } catch(e) { res.status(500).json({ error: 'Export failed' }); }
 });
 
+// PENGATURAN HEARTBEAT UNTUK KEDUA WEBSOCKET
 const heartbeatInterval = setInterval(() => {
-    wss.clients.forEach((wsClient) => {
+    wssAgent.clients.forEach((wsClient) => {
+        if (wsClient.isAlive === false) return wsClient.terminate();
+        wsClient.isAlive = false; wsClient.ping();
+    });
+    wssUI.clients.forEach((wsClient) => {
         if (wsClient.isAlive === false) return wsClient.terminate();
         wsClient.isAlive = false; wsClient.ping();
     });
 }, 30000);
-wss.on('close', () => { clearInterval(heartbeatInterval); });
+
+wssAgent.on('close', () => { clearInterval(heartbeatInterval); });
+wssUI.on('close', () => { clearInterval(heartbeatInterval); });
 
 server.listen(port, () => { console.log(`Server running on port ${port}`); });

@@ -7,8 +7,6 @@ export default function Scenarios({ activeWorkspaceId }) {
     const [mocks, setMocks] = useState([]);
     const [folders, setFolders] = useState([]);
     const [variablesList, setVariablesList] = useState([]);
-    
-    // TAHAP 3: TAMBAHKAN STATE FUNCTIONS LIST
     const [functionsList, setFunctionsList] = useState([]);
 
     const [environments, setEnvironments] = useState([]);
@@ -53,6 +51,20 @@ export default function Scenarios({ activeWorkspaceId }) {
     const [alertConfig, setAlertConfig] = useState({ isOpen: false, message: '', type: 'info', title: 'Info' });
     const [confirmConfig, setConfirmConfig] = useState({ isOpen: false, message: '', onConfirm: null });
 
+    // ==========================================
+    // STATE TAHAP 3: E2E ADB, LOGCAT & CHAOS
+    // ==========================================
+    const uiWs = useRef(null);
+    const deviceActionResolver = useRef({});
+    
+    const [logcatLines, setLogcatLines] = useState([]);
+    const [isLogcatRunning, setIsLogcatRunning] = useState(false);
+    const [showLogcatModal, setShowLogcatModal] = useState(false);
+    const logcatEndRef = useRef(null);
+
+    const [showChaosModal, setShowChaosModal] = useState(false);
+    const [chaosConfig, setChaosConfig] = useState({ delayMs: 0, errorRate: 0, offline: false });
+
     const showAlert = (message, type = 'info', title = '') => setAlertConfig({ isOpen: true, message, type, title: title || (type === 'error' ? 'Error' : type === 'success' ? 'Success' : 'Info') });
 
     const svgRef = useRef(null);
@@ -68,11 +80,73 @@ export default function Scenarios({ activeWorkspaceId }) {
             loadLibraryData();
             loadScenarios();
             fetchEnvironments();
-            fetchFunctions(); // Panggil function list
+            fetchFunctions(); 
         }
     }, [activeWorkspaceId]);
 
-    // FETCH FUNCTIONS (TAHAP 3)
+    // PERBAIKAN: KONEKSI WEBSOCKET UI YANG KEBAL REACT STRICT MODE
+    useEffect(() => {
+        let isMounted = true;
+        let socket = null;
+        let retryTimer = null;
+
+        const connectWebSocket = () => {
+            const token = localStorage.getItem('rf_token');
+            if (!token) return;
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host;
+            socket = new WebSocket(`${protocol}//${host}/ui-ws?token=${token}`);
+
+            socket.onopen = () => {
+                console.log("[UI-WS] Berhasil terhubung ke Backend Server.");
+            };
+
+            socket.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'LOGCAT_TRAFFIC') {
+                        setLogcatLines(prev => {
+                            const newLines = [...prev, msg.data.line];
+                            return newLines.length > 300 ? newLines.slice(newLines.length - 300) : newLines; // Simpan 300 baris terakhir
+                        });
+                    } else if (msg.type === 'DEVICE_ACTION_RESULT') {
+                        const { id, status, output, error } = msg.data;
+                        if (deviceActionResolver.current[id]) {
+                            deviceActionResolver.current[id]({ status, output, error });
+                            delete deviceActionResolver.current[id];
+                        }
+                    }
+                } catch (err) {}
+            };
+
+            socket.onclose = () => {
+                console.log("[UI-WS] Koneksi terputus. Mencoba rekoneksi...");
+                if (isMounted) retryTimer = setTimeout(connectWebSocket, 3000);
+            };
+
+            socket.onerror = (err) => {
+                console.error("[UI-WS] Error koneksi:", err);
+            };
+
+            uiWs.current = socket;
+        };
+
+        connectWebSocket();
+
+        return () => {
+            isMounted = false;
+            if (retryTimer) clearTimeout(retryTimer);
+            if (socket) socket.close();
+        };
+    }, []);
+
+    useEffect(() => {
+        if (showLogcatModal && logcatEndRef.current) {
+            logcatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [logcatLines, showLogcatModal]);
+
     const fetchFunctions = async () => {
         try {
             const token = localStorage.getItem('rf_token');
@@ -163,6 +237,31 @@ export default function Scenarios({ activeWorkspaceId }) {
         }));
     };
 
+    const handleAddDeviceAction = () => {
+        const offset = currentScenario.nodes.length * 20;
+        setCurrentScenario(prev => ({
+            ...prev, nodes: [...prev.nodes, { 
+                id: 'node_' + Date.now() + '_' + Math.floor(Math.random() * 1000), 
+                type: 'device_action', 
+                name: 'Android Action', 
+                action: 'tap', 
+                payload: '500 500',
+                method: 'ADB', 
+                iterations: 1, delay: 0, x: 100 + offset, y: 100 + offset 
+            }]
+        }));
+    };
+
+    const applyChaosConfig = () => {
+        if (uiWs.current && uiWs.current.readyState === WebSocket.OPEN) {
+            uiWs.current.send(JSON.stringify({ type: 'CHAOS_CONFIG', bodyContent: JSON.stringify(chaosConfig) }));
+            showAlert('Chaos Engineering rules applied to Android Network!', 'success');
+            setShowChaosModal(false);
+        } else {
+            showAlert('Koneksi UI ke Server terputus (WebSocket /ui-ws belum OPEN). Pastikan Nginx mengizinkan rute /ui-ws.', 'error');
+        }
+    };
+
     const handleSave = async () => {
         if (!activeWorkspaceId) return;
         try {
@@ -233,7 +332,7 @@ export default function Scenarios({ activeWorkspaceId }) {
     };
 
     const startDrag = (e, node) => {
-        if (e.target.closest('button')) return;
+        if (e.target.closest('button') || e.target.closest('select') || e.target.closest('input')) return;
         e.target.setPointerCapture(e.pointerId);
         setDragState({ active: true, nodeId: node.id, startX: e.clientX, startY: e.clientY, nStartX: node.x, nStartY: node.y });
     };
@@ -413,7 +512,7 @@ export default function Scenarios({ activeWorkspaceId }) {
                 <tr>
                     <th>Step</th>
                     <th>Method</th>
-                    <th>Endpoint Name</th>
+                    <th>Node Name</th>
                     <th>Status</th>
                     <th>Response Time (ms)</th>
                 </tr>`;
@@ -450,12 +549,12 @@ export default function Scenarios({ activeWorkspaceId }) {
                 <tr><th>Global Average Time (ms)</th><td>${perfReport.global.metrics.avg}</td></tr>
             </table>
             <br/>
-            <h3>Metrics Summary per API Endpoint</h3>
+            <h3>Metrics Summary per Node</h3>
             <table border="1">
                 <tr>
                     <th>Method</th>
-                    <th>API Name</th>
-                    <th>Total Req</th>
+                    <th>Node Name</th>
+                    <th>Total Exec</th>
                     <th>Success</th>
                     <th>Failed</th>
                     <th>Avg Time (ms)</th>
@@ -503,14 +602,10 @@ export default function Scenarios({ activeWorkspaceId }) {
         });
     };
 
-    // =====================================
-    // ASYNC VARIABLE PARSER (TAHAP 3)
-    // =====================================
     const applyVariablesAsync = async (text, varsArr, funcsArr) => {
         if (!text || typeof text !== 'string') return text;
         let result = text;
 
-        // Static Variables (Env & Global)
         (varsArr || []).forEach(v => {
             if (v.var_key && v.var_value !== undefined && v.var_value !== null) {
                 const regex = new RegExp(`\\{\\{${v.var_key}\\}\\}`, 'g');
@@ -518,7 +613,6 @@ export default function Scenarios({ activeWorkspaceId }) {
             }
         });
 
-        // Dynamic Functions ({{fn:...}})
         const fnRegex = /\{\{fn:([a-zA-Z0-9_]+)\}\}/g;
         let match;
         const matches = [];
@@ -613,7 +707,7 @@ export default function Scenarios({ activeWorkspaceId }) {
                     if (node.type === 'request') reqData = safeReqs.find(r => r.id === node.refId);
                     else if (node.type === 'mock') reqData = safeMocks.find(m => m.id === node.refId);
 
-                    if (!reqData) {
+                    if (node.type !== 'device_action' && !reqData) {
                         appendLog(`Skipped: Data missing`, 'error');
                         nodeSuccess = false;
                     } else {
@@ -622,13 +716,51 @@ export default function Scenarios({ activeWorkspaceId }) {
                             updateNodeStatus(node.id, 'running', 'Running...', `${iter}/${node.iterations}`);
                             
                             let resultDetail = {
-                                nodeId: node.id, name: node.name, method: reqData.method, url: '',
+                                nodeId: node.id, name: node.name, method: node.method, url: '',
                                 status: 0, time: 0, reqHeaders: '', reqBody: '', resHeaders: '', resBody: '', error: null
                             };
 
                             try {
                                 let responseStatus, responseTime = 0, responseBodyStr = '';
-                                if (node.type === 'request') {
+                                
+                                // LOGIKA KHUSUS UNTUK ADB DEVICE ACTION (E2E ANDROID)
+                                if (node.type === 'device_action') {
+                                    const reqStart = Date.now();
+                                    if (!uiWs.current || uiWs.current.readyState !== WebSocket.OPEN) {
+                                        throw new Error("UI Web belum terhubung ke Server (WebSocket /ui-ws tertutup). Pastikan konfigurasi Nginx aman.");
+                                    }
+                                    
+                                    let processedPayload = await applyVariablesAsync(node.payload, runtimeVariables, functionsList);
+                                    resultDetail.url = `ADB Command: ${node.action}`;
+                                    resultDetail.reqBody = processedPayload;
+                                    
+                                    const actionId = 'act_' + Date.now() + Math.random();
+                                    const promiseAction = new Promise((resolve) => {
+                                        deviceActionResolver.current[actionId] = resolve;
+                                        setTimeout(() => resolve({ status: 'FAILED', error: 'Timeout menunggu respon dari Golang Agent' }), 15000);
+                                    });
+
+                                    uiWs.current.send(JSON.stringify({
+                                        type: 'DEVICE_ACTION',
+                                        id: actionId,
+                                        action: node.action,
+                                        payload: processedPayload
+                                    }));
+
+                                    const adbRes = await promiseAction;
+                                    responseTime = Date.now() - reqStart;
+                                    resultDetail.time = responseTime;
+                                    
+                                    if (adbRes.status === 'SUCCESS') {
+                                        responseStatus = 200;
+                                        resultDetail.status = 200;
+                                        resultDetail.resBody = adbRes.output || 'Success';
+                                    } else {
+                                        responseStatus = 500;
+                                        throw new Error(adbRes.error || "ADB Action Failed");
+                                    }
+                                } 
+                                else if (node.type === 'request') {
                                     let rawHeaders = typeof reqData.headers === 'string' ? JSON.parse(reqData.headers) : (reqData.headers || []);
                                     if (!Array.isArray(rawHeaders)) rawHeaders = [];
                                     let rawAuth = typeof reqData.authorization === 'string' ? JSON.parse(reqData.authorization) : (reqData.authorization || {});
@@ -636,7 +768,6 @@ export default function Scenarios({ activeWorkspaceId }) {
                                     let context = { request: { url: reqData.url, method: reqData.method, headers: rawHeaders, body: reqData.body }, response: null, variables: runtimeVariables.reduce((acc, v) => ({ ...acc, [v.var_key]: v.var_value }), {}) };
                                     context = await runScript(reqData.pre_request_script, context);
                                     
-                                    // IMPLEMENTASI ASYNC PARSER
                                     let url = await applyVariablesAsync(context.request.url, runtimeVariables, functionsList); 
                                     let finalUrl = new URL(url); 
                                     
@@ -907,15 +1038,29 @@ export default function Scenarios({ activeWorkspaceId }) {
                         if (!node) return;
 
                         let reqData = node.type === 'request' ? safeReqs.find(r => r.id === node.refId) : safeMocks.find(m => m.id === node.refId);
-                        if (reqData) {
+                        if (node.type === 'device_action' || reqData) {
                             const reqStart = Date.now();
                             let resultDetail = { vu: vuId, status: 0, time: 0, reqHeaders: '', reqBody: '', resHeaders: '', resBody: '', error: null };
                             
                             try {
                                 let isSuccess = false;
-                                if (node.type === 'request') {
-                                    
-                                    // IMPLEMENTASI ASYNC PARSER DI DALAM VIRTUAL USER LOOP
+                                
+                                if (node.type === 'device_action') {
+                                    if (!uiWs.current || uiWs.current.readyState !== WebSocket.OPEN) throw new Error("UI Web belum terhubung ke Server");
+                                    let processedPayload = await applyVariablesAsync(node.payload, vuVariables, functionsList);
+                                    const actionId = 'act_' + Date.now() + Math.random();
+                                    const pAction = new Promise(res => {
+                                        deviceActionResolver.current[actionId] = res;
+                                        setTimeout(() => res({ status: 'FAILED', error: 'Timeout ADB' }), 15000);
+                                    });
+                                    uiWs.current.send(JSON.stringify({ type: 'DEVICE_ACTION', id: actionId, action: node.action, payload: processedPayload }));
+                                    const adbRes = await pAction;
+                                    resultDetail.time = Date.now() - reqStart;
+                                    if (adbRes.status === 'SUCCESS') {
+                                        isSuccess = true; resultDetail.status = 200; resultDetail.resBody = adbRes.output;
+                                    } else { throw new Error(adbRes.error); }
+                                }
+                                else if (node.type === 'request') {
                                     let url = await applyVariablesAsync(reqData.url, vuVariables, functionsList); 
                                     let finalUrl = new URL(url);
                                     let bType = reqData.bodyType || reqData.body_type || 'none';
@@ -1164,6 +1309,17 @@ export default function Scenarios({ activeWorkspaceId }) {
                                             </div>
                                         </div>
                                         <div className="flex-1 overflow-y-auto scroll-custom p-2 space-y-1">
+                                            
+                                            {/* TOMBOL ADD DEVICE ACTION NODE */}
+                                            <div className="text-[9px] font-extrabold text-gray-500 mt-1 mb-1 px-1 uppercase tracking-wider">Device Automation (ADB)</div>
+                                            <div onClick={handleAddDeviceAction} className="p-1.5 rounded border border-gray-100 dark:border-slate-700 hover:border-teal-200 hover:bg-teal-50 dark:hover:bg-slate-600 dark:hover:border-slate-500 cursor-pointer text-xs mb-3 flex items-center justify-between group transition-colors shadow-sm bg-white dark:bg-slate-800">
+                                                <div className="flex items-center gap-2 truncate">
+                                                    <span className={`font-bold text-teal-600 dark:text-teal-400 text-[9px]`}>ADB</span> 
+                                                    <span className="truncate text-gray-700 dark:text-gray-300 font-medium">Add Action Node</span>
+                                                </div>
+                                                <button className="opacity-0 group-hover:opacity-100 text-teal-600 hover:text-teal-400"><i className="fa-solid fa-plus"></i></button>
+                                            </div>
+
                                             {filteredReqs.length > 0 && <div className="text-[9px] font-extrabold text-gray-500 mt-1 mb-1 px-1 uppercase tracking-wider">Requests</div>}
                                             {folders.map(f => {
                                                 const fReqs = filteredReqs.filter(r => r.folder_id === f.id);
@@ -1229,17 +1385,27 @@ export default function Scenarios({ activeWorkspaceId }) {
 
             <main className="flex-grow flex flex-col bg-white dark:bg-slate-900 min-w-0 h-full overflow-hidden relative">
                 
-                <div className="h-14 md:h-16 px-4 border-b border-gray-200 dark:border-slate-700 flex items-center justify-between bg-white dark:bg-slate-800 shrink-0 z-20 shadow-sm">
-                    <div className="flex items-center gap-3">
+                <div className="h-14 md:h-16 px-4 border-b border-gray-200 dark:border-slate-700 flex items-center justify-between bg-white dark:bg-slate-800 shrink-0 z-20 shadow-sm overflow-x-auto scroll-custom">
+                    <div className="flex items-center gap-3 pr-4">
                         <button onClick={() => setSidebarOpen(true)} className="md:hidden p-1.5 text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-700 rounded transition-colors"><i className="fa-solid fa-bars"></i></button>
                         
                         <div className={`transition-opacity duration-300 ${!isLeftPanelExpanded ? 'opacity-100 flex items-center gap-3' : 'opacity-0 hidden md:flex pointer-events-none'}`}>
-                            <span className="font-bold text-gray-800 dark:text-gray-200 text-lg hidden md:block">{currentScenario.name}</span>
-                            <span className="text-[10px] bg-gray-100 dark:bg-slate-700 px-2 py-0.5 rounded-full text-gray-600 dark:text-gray-300 font-bold hidden md:block">{currentScenario.testType === 'performance' ? 'Performance' : 'API Flow'}</span>
+                            <span className="font-bold text-gray-800 dark:text-gray-200 text-lg hidden md:block whitespace-nowrap">{currentScenario.name}</span>
+                            <span className="text-[10px] bg-gray-100 dark:bg-slate-700 px-2 py-0.5 rounded-full text-gray-600 dark:text-gray-300 font-bold hidden md:block whitespace-nowrap">{currentScenario.testType === 'performance' ? 'Performance' : 'API Flow'}</span>
                         </div>
                     </div>
                     
                     <div className="flex gap-2 items-center">
+                        
+                        {/* TOMBOL LOGCAT DAN CHAOS DI HEADER */}
+                        <div className="flex items-center gap-2 border-r border-gray-300 dark:border-slate-600 pr-3 mr-1">
+                            <button onClick={() => setShowLogcatModal(true)} className="px-3 py-1.5 text-xs font-bold bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors flex items-center gap-2 shadow-sm">
+                                <i className="fa-solid fa-terminal text-green-400"></i> <span className="hidden sm:inline">Logcat</span>
+                            </button>
+                            <button onClick={() => setShowChaosModal(true)} className="px-3 py-1.5 text-xs font-bold bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 border border-orange-200 dark:border-orange-800 hover:bg-orange-200 dark:hover:bg-orange-800/50 rounded-lg transition-colors flex items-center gap-2 shadow-sm">
+                                <i className="fa-solid fa-bolt"></i> <span className="hidden sm:inline">Chaos Rule</span>
+                            </button>
+                        </div>
                         
                         <div className="flex items-center gap-1 border-r border-gray-300 dark:border-slate-600 pr-3 mr-1">
                             <i className="fa-solid fa-globe text-gray-400 text-xs hidden md:block"></i>
@@ -1257,16 +1423,16 @@ export default function Scenarios({ activeWorkspaceId }) {
                         </div>
 
                         <button onClick={handleSave} disabled={isRunning} className="px-4 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50">
-                            <i className="fa-solid fa-save"></i> <span className="hidden sm:inline">Save</span>
+                            <i className="fa-solid fa-save"></i> <span className="hidden lg:inline">Save</span>
                         </button>
                         
                         {!isRunning ? (
-                            <button onClick={handleRunClick} className="px-4 py-1.5 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors flex items-center gap-2 shadow-sm">
-                                <i className="fa-solid fa-play"></i> <span className="hidden sm:inline">Run Test</span>
+                            <button onClick={handleRunClick} className="px-4 py-1.5 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors flex items-center gap-2 shadow-sm whitespace-nowrap">
+                                <i className="fa-solid fa-play"></i> <span className="hidden lg:inline">Run Test</span>
                             </button>
                         ) : (
-                            <button onClick={handleStopTest} className="px-4 py-1.5 text-sm font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors flex items-center gap-2 shadow-sm">
-                                <i className="fa-solid fa-circle-notch fa-spin"></i> <span className="hidden sm:inline">Stop</span>
+                            <button onClick={handleStopTest} className="px-4 py-1.5 text-sm font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors flex items-center gap-2 shadow-sm whitespace-nowrap">
+                                <i className="fa-solid fa-circle-notch fa-spin"></i> <span className="hidden lg:inline">Stop</span>
                             </button>
                         )}
                         
@@ -1355,7 +1521,9 @@ export default function Scenarios({ activeWorkspaceId }) {
                                 <div data-id={node.id} onPointerDown={(e) => startDrag(e, node)} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} className="flex justify-between items-start mb-2 border-b border-gray-100 dark:border-slate-700 pb-2 cursor-grab active:cursor-grabbing node-header" style={{ touchAction: 'none' }}>
                                     <div className="flex flex-col truncate pr-2 pointer-events-none">
                                         <div className="flex items-center gap-2 truncate">
-                                            <div className={`w-6 h-6 shrink-0 rounded flex items-center justify-center text-xs ${node.type === 'mock' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'}`}><i className={`fa-solid ${node.type === 'mock' ? 'fa-server' : 'fa-paper-plane'}`}></i></div>
+                                            <div className={`w-6 h-6 shrink-0 rounded flex items-center justify-center text-xs ${node.type === 'mock' ? 'bg-orange-100 text-orange-600' : node.type === 'device_action' ? 'bg-teal-100 text-teal-600' : 'bg-blue-100 text-blue-600'}`}>
+                                                <i className={`fa-solid ${node.type === 'mock' ? 'fa-server' : node.type === 'device_action' ? 'fa-mobile-screen' : 'fa-paper-plane'}`}></i>
+                                            </div>
                                             <span className="font-bold text-sm truncate">{node.name}</span>
                                         </div>
                                     </div>
@@ -1363,15 +1531,35 @@ export default function Scenarios({ activeWorkspaceId }) {
                                         <button onClick={() => removeNode(node.id)} className="text-gray-400 hover:text-red-500 p-1"><i className="fa-solid fa-times text-xs"></i></button>
                                     </div>
                                 </div>
-                                <div className="flex flex-col gap-2 text-xs text-gray-600 dark:text-gray-400 mb-1">
-                                    <div className="flex justify-between items-center"><span>Method:</span><span className={`font-bold method-${node.method}`}>{node.method}</span></div>
-                                    {currentScenario.testType === 'api_flow' && (
-                                        <>
-                                        <div className="flex justify-between items-center"><span>Iterations:</span><input type="number" min="1" max="100" value={node.iterations} onChange={e => handleNodeChange(node.id, 'iterations', e.target.value)} onBlur={e => handleNodeChange(node.id, 'iterations', parseInt(e.target.value)||1)} className="w-16 bg-gray-50 dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded px-1 py-0.5 outline-none text-center font-mono" /></div>
-                                        <div className="flex justify-between items-center"><span>Delay (ms):</span><input type="number" min="0" value={node.delay} onChange={e => handleNodeChange(node.id, 'delay', e.target.value)} onBlur={e => handleNodeChange(node.id, 'delay', parseInt(e.target.value)||0)} className="w-16 bg-gray-50 dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded px-1 py-0.5 outline-none text-center font-mono" /></div>
-                                        </>
-                                    )}
-                                </div>
+                                
+                                {node.type === 'device_action' ? (
+                                    <div className="flex flex-col gap-2 text-xs text-gray-600 dark:text-gray-400 mb-1">
+                                        <select value={node.action} onChange={e => handleNodeChange(node.id, 'action', e.target.value)} className="w-full bg-gray-50 dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 outline-none font-bold text-gray-700 dark:text-gray-300">
+                                            <option value="tap">Tap Screen (x y)</option>
+                                            <option value="text">Input Text String</option>
+                                            <option value="keycode">Input Keycode</option>
+                                            <option value="swipe">Swipe (x1 y1 x2 y2 ms)</option>
+                                            <option value="shell">Custom ADB Shell</option>
+                                        </select>
+                                        <input type="text" value={node.payload} onChange={e => handleNodeChange(node.id, 'payload', e.target.value)} placeholder="Payload/Arguments" className="w-full bg-gray-50 dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded px-2 py-1.5 outline-none font-mono text-[10px]" />
+                                        {currentScenario.testType === 'api_flow' && (
+                                            <>
+                                                <div className="flex justify-between items-center mt-1"><span>Delay (ms):</span><input type="number" min="0" value={node.delay} onChange={e => handleNodeChange(node.id, 'delay', e.target.value)} onBlur={e => handleNodeChange(node.id, 'delay', parseInt(e.target.value)||0)} className="w-16 bg-gray-50 dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded px-1 py-0.5 outline-none text-center font-mono" /></div>
+                                            </>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col gap-2 text-xs text-gray-600 dark:text-gray-400 mb-1">
+                                        <div className="flex justify-between items-center"><span>Method:</span><span className={`font-bold method-${node.method}`}>{node.method}</span></div>
+                                        {currentScenario.testType === 'api_flow' && (
+                                            <>
+                                            <div className="flex justify-between items-center"><span>Iterations:</span><input type="number" min="1" max="100" value={node.iterations} onChange={e => handleNodeChange(node.id, 'iterations', e.target.value)} onBlur={e => handleNodeChange(node.id, 'iterations', parseInt(e.target.value)||1)} className="w-16 bg-gray-50 dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded px-1 py-0.5 outline-none text-center font-mono" /></div>
+                                            <div className="flex justify-between items-center"><span>Delay (ms):</span><input type="number" min="0" value={node.delay} onChange={e => handleNodeChange(node.id, 'delay', e.target.value)} onBlur={e => handleNodeChange(node.id, 'delay', parseInt(e.target.value)||0)} className="w-16 bg-gray-50 dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded px-1 py-0.5 outline-none text-center font-mono" /></div>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
+
                                 {node.runStatus && (
                                     <div className="mt-2 pt-2 border-t border-gray-100 dark:border-slate-700 flex items-center justify-between">
                                         <div className="flex items-center gap-1.5">
@@ -1388,7 +1576,7 @@ export default function Scenarios({ activeWorkspaceId }) {
                             ))}
                             {currentScenario.nodes.length === 0 && (
                                 <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center text-gray-500">
-                                    <i className="fa-solid fa-diagram-project text-4xl mb-3 opacity-50"></i><p>Add requests from the library to build your test scenario</p>
+                                    <i className="fa-solid fa-diagram-project text-4xl mb-3 opacity-50"></i><p>Add requests, mocks, or Android actions to build your test scenario</p>
                                 </div>
                             )}
                         </div>
@@ -1409,6 +1597,83 @@ export default function Scenarios({ activeWorkspaceId }) {
                     </div>
                 </div>
             </main>
+
+            {/* MODAL LOGCAT VIEWER */}
+            {showLogcatModal && (
+                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                    <div className="bg-slate-900 w-full max-w-5xl rounded-xl shadow-2xl border border-slate-700 flex flex-col h-[85vh] animate-fade-in">
+                        <div className="p-4 border-b border-slate-700 flex justify-between items-center bg-slate-800 shrink-0">
+                            <h3 className="text-white font-mono font-bold flex items-center gap-3">
+                                <i className="fa-solid fa-terminal text-green-400"></i> 
+                                Android Logcat Viewer
+                                {isLogcatRunning && <span className="flex h-3 w-3"><span className="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-green-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span></span>}
+                            </h3>
+                            <div className="flex gap-2">
+                                <button onClick={() => {
+                                    if (!uiWs.current || uiWs.current.readyState !== WebSocket.OPEN) return showAlert('Koneksi UI ke Server terputus. Pastikan Nginx /ui-ws aktif.', 'error');
+                                    const action = isLogcatRunning ? 'stop' : 'start';
+                                    uiWs.current.send(JSON.stringify({ type: 'LOGCAT', action: action, payload: '' }));
+                                    setIsLogcatRunning(!isLogcatRunning);
+                                }} className={`px-4 py-1.5 rounded-md text-xs font-bold text-white shadow-sm transition-colors flex items-center gap-2 ${isLogcatRunning ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}>
+                                    <i className={`fa-solid ${isLogcatRunning ? 'fa-stop' : 'fa-play'}`}></i> {isLogcatRunning ? 'Stop Stream' : 'Start Stream'}
+                                </button>
+                                <button onClick={() => setLogcatLines([])} className="px-4 py-1.5 rounded-md text-xs font-bold bg-slate-700 text-white hover:bg-slate-600 transition-colors"><i className="fa-solid fa-eraser"></i> Clear</button>
+                                <button onClick={() => setShowLogcatModal(false)} className="px-4 py-1.5 rounded-md text-xs font-bold bg-slate-700 text-white hover:bg-slate-600 transition-colors"><i className="fa-solid fa-times"></i> Close</button>
+                            </div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 font-mono text-[10px] sm:text-xs text-green-400 bg-black custom-scrollbar leading-relaxed">
+                            {logcatLines.length === 0 ? (
+                                <div className="h-full flex flex-col items-center justify-center text-slate-600 gap-4">
+                                    <i className="fa-brands fa-android text-5xl"></i>
+                                    <p>Waiting for ADB log stream...</p>
+                                </div>
+                            ) : (
+                                logcatLines.map((l, i) => (
+                                    <div key={i} className={`whitespace-pre-wrap break-all ${l.includes(' E ') || l.includes('Exception') || l.includes('Error') ? 'text-red-500 font-bold' : l.includes(' W ') ? 'text-yellow-400' : ''}`}>
+                                        {l}
+                                    </div>
+                                ))
+                            )}
+                            <div ref={logcatEndRef} />
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* MODAL CHAOS ENGINEERING */}
+            {showChaosModal && (
+                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                    <div className="bg-white dark:bg-slate-800 w-full max-w-md rounded-2xl shadow-2xl border border-gray-200 dark:border-slate-700 flex flex-col animate-fade-in">
+                        <div className="p-5 border-b border-gray-200 dark:border-slate-700 flex justify-between items-center bg-orange-50 dark:bg-orange-900/20 shrink-0">
+                            <h3 className="text-orange-700 dark:text-orange-400 font-bold text-lg"><i className="fa-solid fa-bolt mr-2"></i>Chaos Engineering</h3>
+                            <button onClick={() => setShowChaosModal(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"><i className="fa-solid fa-times"></i></button>
+                        </div>
+                        <div className="p-6 space-y-5">
+                            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                                Atur manipulasi jaringan (*Network Throttling*) yang akan dieksekusi secara real-time oleh **Golang Agent** pada perangkat Android Anda.
+                            </p>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">Network Delay (ms)</label>
+                                <input type="number" min="0" value={chaosConfig.delayMs} onChange={e => setChaosConfig({...chaosConfig, delayMs: parseInt(e.target.value)||0})} className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-gray-50 dark:bg-slate-900 outline-none focus:ring-2 focus:ring-orange-500 font-mono" />
+                                <p className="text-[10px] text-gray-500 mt-1.5">*Simulasi jaringan 3G/Edge lambat. Setiap request akan ditahan selama sekian milidetik.*</p>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">Random Error Rate (%)</label>
+                                <input type="number" min="0" max="100" value={chaosConfig.errorRate} onChange={e => setChaosConfig({...chaosConfig, errorRate: parseInt(e.target.value)||0})} className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg bg-gray-50 dark:bg-slate-900 outline-none focus:ring-2 focus:ring-orange-500 font-mono" />
+                                <p className="text-[10px] text-gray-500 mt-1.5">*Peluang Android menerima respon <b>HTTP 502 Bad Gateway</b> secara acak.*</p>
+                            </div>
+                            <div className="flex items-center gap-3 mt-4 pt-4 border-t border-gray-100 dark:border-slate-700">
+                                <input type="checkbox" checked={chaosConfig.offline} onChange={e => setChaosConfig({...chaosConfig, offline: e.target.checked})} className="w-5 h-5 accent-orange-600 rounded cursor-pointer" id="offline-mode" />
+                                <label htmlFor="offline-mode" className="text-sm font-bold text-red-600 dark:text-red-400 cursor-pointer">Simulate Offline (Airplane Mode)</label>
+                            </div>
+                        </div>
+                        <div className="p-5 border-t border-gray-200 dark:border-slate-700 flex justify-end gap-3 bg-gray-50 dark:bg-slate-800 shrink-0">
+                            <button onClick={() => setShowChaosModal(false)} className="px-5 py-2 text-sm font-bold bg-gray-200 hover:bg-gray-300 dark:bg-slate-700 dark:text-white rounded-lg transition-colors">Cancel</button>
+                            <button onClick={applyChaosConfig} className="px-5 py-2 text-sm font-bold bg-orange-600 text-white hover:bg-orange-700 rounded-lg shadow-md transition-colors flex items-center gap-2"><i className="fa-solid fa-satellite-dish"></i> Apply Chaos to Agent</button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {apiFlowReport && (
                 <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -1507,14 +1772,14 @@ export default function Scenarios({ activeWorkspaceId }) {
                                 </div>
                             </div>
                             
-                            <h4 className="font-bold text-gray-800 dark:text-gray-200 mb-3 border-b border-gray-200 dark:border-slate-700 pb-2">Details per API Endpoint</h4>
+                            <h4 className="font-bold text-gray-800 dark:text-gray-200 mb-3 border-b border-gray-200 dark:border-slate-700 pb-2">Details per Node</h4>
                             
                             <div className="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl overflow-hidden shadow-sm">
                                 <table className="w-full text-sm text-left whitespace-nowrap">
                                     <thead className="bg-gray-50 dark:bg-slate-700/50 text-gray-600 dark:text-gray-300 font-bold">
                                         <tr>
                                             <th className="px-4 py-3 w-8"></th>
-                                            <th className="px-4 py-3">API Name</th>
+                                            <th className="px-4 py-3">Node Name</th>
                                             <th className="px-4 py-3 text-center">Total</th>
                                             <th className="px-4 py-3 text-center text-emerald-600 dark:text-emerald-400">Success</th>
                                             <th className="px-4 py-3 text-center text-red-600 dark:text-red-400">Failed</th>
@@ -1571,22 +1836,22 @@ export default function Scenarios({ activeWorkspaceId }) {
                                                                             {expandedPerfDetail === idx && (
                                                                                 <div className="border-t border-gray-100 dark:border-slate-700 p-4 grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs bg-gray-50/30 dark:bg-slate-900/30">
                                                                                     <div>
-                                                                                        <h6 className="font-bold text-gray-500 uppercase tracking-wider border-b border-gray-200 dark:border-slate-700 pb-1 mb-2">Request</h6>
+                                                                                        <h6 className="font-bold text-gray-500 uppercase tracking-wider border-b border-gray-200 dark:border-slate-700 pb-1 mb-2">Request / Execution</h6>
                                                                                         <div className="font-mono bg-white dark:bg-slate-950 p-1.5 rounded border border-gray-200 dark:border-slate-700 break-all mb-2">{det.url}</div>
                                                                                         <div className="font-bold text-gray-500 mt-2">Headers:</div>
                                                                                         <pre className="bg-white dark:bg-slate-950 p-2 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto scroll-custom max-h-32 mt-1">{formatPayload(det.reqHeaders)}</pre>
-                                                                                        <div className="font-bold text-gray-500 mt-2">Body:</div>
+                                                                                        <div className="font-bold text-gray-500 mt-2">Body/Payload:</div>
                                                                                         <pre className="bg-white dark:bg-slate-950 p-2 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto scroll-custom max-h-40 mt-1">{formatPayload(det.reqBody) || 'No Body'}</pre>
                                                                                     </div>
                                                                                     <div>
-                                                                                        <h6 className="font-bold text-gray-500 uppercase tracking-wider border-b border-gray-200 dark:border-slate-700 pb-1 mb-2">Response</h6>
+                                                                                        <h6 className="font-bold text-gray-500 uppercase tracking-wider border-b border-gray-200 dark:border-slate-700 pb-1 mb-2">Response / Result</h6>
                                                                                         {det.error ? (
                                                                                             <div className="bg-red-50 text-red-600 p-2 border border-red-200 rounded font-bold break-all">Error: {det.error}</div>
                                                                                         ) : (
                                                                                             <>
                                                                                             <div className="font-bold text-gray-500 mt-2">Headers:</div>
                                                                                             <pre className="bg-white dark:bg-slate-950 p-2 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto scroll-custom max-h-32 mt-1">{formatPayload(det.resHeaders)}</pre>
-                                                                                            <div className="font-bold text-gray-500 mt-2">Body:</div>
+                                                                                            <div className="font-bold text-gray-500 mt-2">Body/Output:</div>
                                                                                             <pre className="bg-white dark:bg-slate-950 p-2 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto scroll-custom max-h-40 mt-1">{formatPayload(det.resBody)}</pre>
                                                                                             </>
                                                                                         )}
@@ -1658,6 +1923,7 @@ export default function Scenarios({ activeWorkspaceId }) {
                     </div>
                 </div>
             )}
+            
             {confirmConfig.isOpen && (
                 <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 m-0">
                     <div className="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-full max-w-sm p-5">

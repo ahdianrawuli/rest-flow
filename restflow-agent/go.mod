@@ -1,5 +1,8 @@
 module restflow-agent
 
-go 1.22.2
+go 1.20
 
-require github.com/gorilla/websocket v1.5.3 // indirect
+require (
+	github.com/elazarl/goproxy v0.0.0-20230808193330-2592e75ae04a
+	github.com/gorilla/websocket v1.5.0
+)

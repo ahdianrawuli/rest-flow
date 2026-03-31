@@ -91,6 +91,18 @@ export default function Auth() {
             color: 'text-blue-500 bg-blue-100 dark:bg-blue-900/30',
             title: 'Real-Time Collaboration',
             desc: 'Invite your teammates into Workspaces with no quota limits. Share Collections, request folders, variables, and testing scenario results in real-time, just like Google Docs.'
+        },
+        {
+            icon: 'fa-satellite-dish',
+            color: 'text-purple-500 bg-purple-100 dark:bg-purple-900/30',
+            title: 'MITM HTTPS Interceptor',
+            desc: 'Intercept, inspect, and modify HTTP/HTTPS traffic from any mobile device or browser. Install the generated Root CA to decrypt SSL traffic and debug external services on the fly.'
+        },
+        {
+            icon: 'fa-mobile-screen-button',
+            color: 'text-orange-500 bg-orange-100 dark:bg-orange-900/30',
+            title: 'Android ADB & Chaos',
+            desc: 'Automate physical Android devices via ADB. Trigger UI taps, swipes, read live Logcat streams, and simulate network failures with the built-in Chaos Engine directly from the browser.'
         }
     ];
 
@@ -115,6 +127,13 @@ export default function Auth() {
             desc: "Ensure your server doesn't crash during sudden traffic spikes. Define Concurrent Virtual Users, set the Spawn Rate per second, and monitor P95 Response Time, success rates, and failure rates in real-time. Get comprehensive Excel reports after testing for analysis by your DevOps or SRE team.",
             image: "https://images.unsplash.com/photo-1551288049-bebda4e38f71?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80",
             reverse: false
+        },
+        {
+            title: "Mobile App Debugging & Chaos Engineering",
+            subtitle: "MITM Proxy & ADB Integration",
+            desc: "Connect your Android device to the Rest Flow local agent proxy. Intercept SSL traffic from your mobile apps, monitor live Logcat streams, and inject artificial network delays (Chaos Testing) to see how your app handles 502 Bad Gateway errors or slow connections.",
+            image: "https://images.unsplash.com/photo-1526498460520-4c246339dccb?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80",
+            reverse: true
         }
     ];
 
@@ -266,12 +285,13 @@ export default function Auth() {
                             <h2 className="text-3xl font-extrabold text-gray-900 dark:text-white sm:text-4xl tracking-tight">Complete Toolkit for Modern Developers</h2>
                             <p className="mt-4 text-lg text-gray-600 dark:text-gray-400 max-w-3xl mx-auto">We designed these features to accelerate your workflow from the testing phase to high-performance deployment.</p>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                        {/* Diperbarui ke grid xl:grid-cols-4 untuk mengakomodasi 8 fitur */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8">
                             {features.map((feature, idx) => (
-                                <div key={idx} className="bg-gray-50 dark:bg-slate-800 rounded-3xl p-8 border border-gray-100 dark:border-slate-700 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 group">
-                                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl mb-6 ${feature.color} shadow-sm group-hover:scale-110 transition-transform`}><i className={`fa-solid ${feature.icon}`}></i></div>
+                                <div key={idx} className="bg-gray-50 dark:bg-slate-800 rounded-3xl p-8 border border-gray-100 dark:border-slate-700 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 group flex flex-col">
+                                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl mb-6 ${feature.color} shadow-sm group-hover:scale-110 transition-transform shrink-0`}><i className={`fa-solid ${feature.icon}`}></i></div>
                                     <h3 className="text-xl font-bold mb-3 text-gray-900 dark:text-white">{feature.title}</h3>
-                                    <p className="text-gray-600 dark:text-gray-400 text-sm leading-relaxed">{feature.desc}</p>
+                                    <p className="text-gray-600 dark:text-gray-400 text-sm leading-relaxed flex-grow">{feature.desc}</p>
                                 </div>
                             ))}
                         </div>
@@ -389,4 +409,3 @@ export default function Auth() {
         </div>
     );
 }
-

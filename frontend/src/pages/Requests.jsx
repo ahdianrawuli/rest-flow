@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ApiService } from '../utils/api';
 import RequestsSidebar from '../components/RequestsSidebar';
 import RequestEditor from '../components/RequestEditor';
+import InterceptorModal from '../components/InterceptorModal';
 
 export default function Requests({ activeWorkspaceId }) {
     const [requestsHistory, setRequestsHistory] = useState([]);
@@ -17,6 +18,11 @@ export default function Requests({ activeWorkspaceId }) {
 
     const [alertConfig, setAlertConfig] = useState({ isOpen: false, message: '', type: 'info', title: 'Info' });
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+
+    // ==========================================
+    // STATE UNTUK INTERCEPTOR MODAL
+    // ==========================================
+    const [showInterceptor, setShowInterceptor] = useState(false);
 
     const showAlert = (message, type = 'info', title = '') => {
         let defaultTitle = title;
@@ -352,14 +358,26 @@ export default function Requests({ activeWorkspaceId }) {
 
             {sidebarOpen && <div className="fixed inset-0 bg-black/50 z-20 md:hidden" onClick={() => setSidebarOpen(false)}></div>}
 
-            <RequestEditor
-                activeWorkspaceId={activeWorkspaceId} // Diteruskan untuk kebutuhan endpoint Envs
-                currentRequest={currentRequest} setCurrentRequest={setCurrentRequest} foldersList={foldersList}
-                variablesList={variablesList} loadHistory={loadHistory} // Diteruskan agar logic proxy tahu variabel
-                responseState={responseState} setResponseState={setResponseState} handleSaveRequest={handleSaveRequest}
-                handleDeleteRequest={handleDeleteRequestTrigger} setSidebarOpen={setSidebarOpen} setImportModalOpen={setImportModalOpen}
-                showAlert={showAlert}
-            />
+            <div className="flex-1 flex flex-col min-w-0 w-full h-full">
+                {/* TOMBOL BUKA INTERCEPTOR */}
+                <div className="bg-indigo-50 dark:bg-indigo-900/20 border-b border-indigo-100 dark:border-indigo-800/30 px-4 py-2 flex justify-between items-center shrink-0 z-10">
+                    <div className="text-xs font-medium text-indigo-700 dark:text-indigo-400">
+                        <i className="fa-solid fa-mobile-screen mr-2"></i> Connect your service to the Resty Flow proxy (127.0.0.1:8081).
+                    </div>
+                    <button onClick={() => setShowInterceptor(true)} className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded shadow-sm transition-colors flex items-center gap-1.5">
+                        <i className="fa-solid fa-satellite-dish"></i> Open Interceptor
+                    </button>
+                </div>
+
+                <RequestEditor
+                    activeWorkspaceId={activeWorkspaceId}
+                    currentRequest={currentRequest} setCurrentRequest={setCurrentRequest} foldersList={foldersList}
+                    variablesList={variablesList} loadHistory={loadHistory}
+                    responseState={responseState} setResponseState={setResponseState} handleSaveRequest={handleSaveRequest}
+                    handleDeleteRequest={handleDeleteRequestTrigger} setSidebarOpen={setSidebarOpen} setImportModalOpen={setImportModalOpen}
+                    showAlert={showAlert}
+                />
+            </div>
 
             {/* Modals */}
             {importModalOpen && (
@@ -444,6 +462,14 @@ export default function Requests({ activeWorkspaceId }) {
                     </div>
                 </div>
             )}
+
+            {/* MODAL INTERCEPTOR */}
+            <InterceptorModal 
+                isOpen={showInterceptor}
+                onClose={() => setShowInterceptor(false)}
+                activeWorkspaceId={activeWorkspaceId}
+                foldersList={foldersList}
+            />
         </div>
     );
 }
